@@ -8,7 +8,12 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	r := router.New()
 	log.Printf("server starting on port %s", cfg.Port)
 
