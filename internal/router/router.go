@@ -11,5 +11,15 @@ func New() *gin.Engine {
 
 	r.GET("/health", handler.Health)
 
+	api := r.Group("/api")
+	{
+		auth := api.Group("/auth")
+		{
+			auth.POST("/login", handler.Login)
+			auth.POST("/register", handler.Register)
+		}
+		api.GET("/me", handler.Me)
+	}
+
 	return r
 }
