@@ -4,7 +4,9 @@ import (
 	"log"
 
 	"github.com/AlexMeiko/guchat/internal/config"
+	"github.com/AlexMeiko/guchat/internal/handler"
 	"github.com/AlexMeiko/guchat/internal/router"
+	"github.com/AlexMeiko/guchat/internal/service"
 )
 
 func main() {
@@ -14,7 +16,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	r := router.New()
+	jwtService := service.NewJWTService(
+		cfg.JWTSecret,
+		cfg.JWTAccessTTL,
+		cfg.JWTRefreshTTL,
+	)
+
+	authHandler := handler.NewAuthHandler(jwtService)
+
+	r := router.New(authHandler)
 	log.Printf("server starting on port %s", cfg.Port)
 
 	if err := r.Run(":" + cfg.Port); err != nil {

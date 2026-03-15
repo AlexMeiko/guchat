@@ -10,10 +10,10 @@ import (
 )
 
 type Config struct {
-	Port                string
-	JWTSecret           string
-	JWTAccessExpiresIn  int64
-	JWTRefreshExpiresIn int64
+	Port          string
+	JWTSecret     string
+	JWTAccessTTL  int64
+	JWTRefreshTTL int64
 }
 
 func Load() (Config, error) {
@@ -25,10 +25,10 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		Port:                getEnv("PORT", "8080"),
-		JWTSecret:           jwtSecret,
-		JWTAccessExpiresIn:  getEnvInt64("JWT_ACCESS_EXPIRES_IN", 3600),
-		JWTRefreshExpiresIn: getEnvInt64("JWT_REFRESH_EXPIRES_IN", 2592000),
+		Port:          getEnv("PORT", "8080"),
+		JWTSecret:     jwtSecret,
+		JWTAccessTTL:  getEnvInt64("JWT_ACCESS_TTL_SECONDS", 3600),
+		JWTRefreshTTL: getEnvInt64("JWT_REFRESH_TTL_SECONDS", 2592000),
 	}, nil
 }
 

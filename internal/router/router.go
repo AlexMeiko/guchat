@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func New() *gin.Engine {
+func New(authHandler *handler.AuthHandler) *gin.Engine {
 	r := gin.Default()
 
 	r.GET("/health", handler.Health)
@@ -15,10 +15,10 @@ func New() *gin.Engine {
 	{
 		auth := api.Group("/auth")
 		{
-			auth.POST("/login", handler.Login)
-			auth.POST("/register", handler.Register)
+			auth.POST("/login", authHandler.Login)
+			auth.POST("/register", authHandler.Register)
 		}
-		api.GET("/me", handler.Me)
+		api.GET("/me", authHandler.Me)
 	}
 
 	return r
