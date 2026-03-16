@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/AlexMeiko/guchat/internal/model"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -54,6 +55,7 @@ func (s *JWTService) GenerateAccessToken(userID int64, username, role string) (s
 
 	return signedToken, int64(s.accessTTL / time.Second), nil
 }
+
 func (s *JWTService) GenerateRefreshToken(userID int64) (string, int64, error) {
 	now := time.Now()
 	expiresAt := now.Add(s.refreshTTL)
@@ -73,4 +75,32 @@ func (s *JWTService) GenerateRefreshToken(userID int64) (string, int64, error) {
 	}
 
 	return signedToken, int64(s.refreshTTL / time.Second), nil
+}
+
+func (s *JWTService) ParseAccessToken(tokenStr string) (model.AuthUser, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &accessTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return s.secretKey, nil
+	})
+
+	if err != nil {
+		return model.AuthUser{}, err
+	}
+
+	claims, ok := token.Claims.(*accessTokenClaims)
+
+	if !ok || !token.Valid {
+
+		return model.AuthUser{}, jwt.ErrTokenInvalidClaims
+	}
+
+	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
+	if err != nil {
+		return model.AuthUser{}, err
+	}
+
+	return model.AuthUser{
+		ID:       userID,
+		Username: claims.Username,
+		Role:     claims.Role,
+	}, nil
 }

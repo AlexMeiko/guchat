@@ -20,6 +20,12 @@ type UserResponse struct {
 	Role     string `json:"role"`
 }
 
+type AuthUser struct {
+	ID       int64
+	Username string
+	Role     string
+}
+
 type LoginResponse struct {
 	AccessToken      string       `json:"access_token"`
 	TokenType        string       `json:"token_type"`

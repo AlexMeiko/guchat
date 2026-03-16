@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 
+	"github.com/AlexMeiko/guchat/internal/middleware"
 	"github.com/AlexMeiko/guchat/internal/model"
 	"github.com/AlexMeiko/guchat/internal/service"
 	"github.com/gin-gonic/gin"
@@ -74,7 +75,25 @@ func (h *AuthHandler) Login(c *gin.Context) {
 }
 
 func (h *AuthHandler) Me(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, model.ErrorResponse{
-		Error: "not implemented",
+	value, exists := c.Get(middleware.CurrentUserKey)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{
+			Error: "current user not found",
+		})
+		return
+	}
+
+	user, ok := value.(model.AuthUser)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: "invalid current user context",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.UserResponse{
+		ID:       user.ID,
+		Username: user.Username,
+		Role:     user.Role,
 	})
 }
