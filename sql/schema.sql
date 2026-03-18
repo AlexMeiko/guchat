@@ -23,3 +23,16 @@ CREATE TABLE refresh_tokens
         FOREIGN KEY (user_id) REFERENCES users (id)
             ON DELETE CASCADE
 );
+
+CREATE TABLE conversations
+(
+    id         CHAR(36) PRIMARY KEY,
+    user_id    BIGINT       NOT NULL,
+    title      VARCHAR(255) NOT NULL DEFAULT '',
+    created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_conversations_user_id (user_id),
+    CONSTRAINT fk_conversations_user_id
+        FOREIGN KEY (user_id) REFERENCES users (id)
+            ON DELETE CASCADE
+);
