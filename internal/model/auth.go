@@ -10,6 +10,10 @@ type LoginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
+type LogoutRequest struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
+}
+
 type RefreshRequest struct {
 	RefreshToken string `json:"refresh_token" binding:"required"`
 }
@@ -18,12 +22,6 @@ type UserResponse struct {
 	ID       int64  `json:"id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
-}
-
-type AuthUser struct {
-	ID       int64
-	Username string
-	Role     string
 }
 
 type LoginResponse struct {

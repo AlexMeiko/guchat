@@ -16,8 +16,10 @@ func New(authHandler *handler.AuthHandler, jwtService *service.JWTService) *gin.
 	{
 		auth := api.Group("/auth")
 		{
-			auth.POST("/login", authHandler.Login)
 			auth.POST("/register", authHandler.Register)
+			auth.POST("/login", authHandler.Login)
+			auth.POST("/refresh", authHandler.Refresh)
+			auth.POST("/logout", authHandler.Logout)
 		}
 		api.GET("/me", middleware.Auth(jwtService), authHandler.Me)
 	}

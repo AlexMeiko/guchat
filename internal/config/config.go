@@ -11,6 +11,7 @@ import (
 
 type Config struct {
 	Port          string
+	DatabaseURL   string
 	JWTSecret     string
 	JWTAccessTTL  int64
 	JWTRefreshTTL int64
@@ -24,8 +25,14 @@ func Load() (Config, error) {
 		return Config{}, errors.New("JWT_SECRET is required")
 	}
 
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		return Config{}, errors.New("DATABASE_URL is required")
+	}
+
 	return Config{
 		Port:          getEnv("PORT", "8080"),
+		DatabaseURL:   databaseURL,
 		JWTSecret:     jwtSecret,
 		JWTAccessTTL:  getEnvInt64("JWT_ACCESS_TTL_SECONDS", 3600),
 		JWTRefreshTTL: getEnvInt64("JWT_REFRESH_TTL_SECONDS", 2592000),

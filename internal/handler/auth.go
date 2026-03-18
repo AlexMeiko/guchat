@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/AlexMeiko/guchat/internal/middleware"
@@ -10,12 +11,12 @@ import (
 )
 
 type AuthHandler struct {
-	jwtService *service.JWTService
+	authService *service.AuthService
 }
 
-func NewAuthHandler(jwtService *service.JWTService) *AuthHandler {
+func NewAuthHandler(authService *service.AuthService) *AuthHandler {
 	return &AuthHandler{
-		jwtService: jwtService,
+		authService: authService,
 	}
 }
 
@@ -28,9 +29,21 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusNotImplemented, model.ErrorResponse{
-		Error: "not implemented",
-	})
+	err := h.authService.Register(c.Request.Context(), req.Username, req.Password)
+	if err != nil {
+		if errors.Is(err, service.ErrUsernameAlreadyExists) {
+			c.JSON(http.StatusConflict, model.ErrorResponse{
+				Error: "username already exists",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: "internal server error",
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, model.OKResponse{OK: true})
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
@@ -42,36 +55,90 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	user := model.UserResponse{
-		ID:       1,
-		Username: req.Username,
-		Role:     "user",
-	}
-
-	accessToken, accessExpiresIn, err := h.jwtService.GenerateAccessToken(user.ID, user.Username, user.Role)
+	result, err := h.authService.Login(c.Request.Context(), req.Username, req.Password)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
-			Error: "failed to generate access token",
-		})
-		return
-	}
+		if errors.Is(err, service.ErrInvalidCredentials) {
+			c.JSON(http.StatusUnauthorized, model.ErrorResponse{
+				Error: "invalid username or password",
+			})
+			return
+		}
 
-	refreshToken, refreshExpiresIn, err := h.jwtService.GenerateRefreshToken(user.ID)
-	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
-			Error: "failed to generate refresh token",
+			Error: "internal server error",
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, model.LoginResponse{
-		AccessToken:      accessToken,
+		AccessToken:      result.AccessToken.Token,
 		TokenType:        "Bearer",
-		ExpiresIn:        accessExpiresIn,
-		RefreshToken:     refreshToken,
-		RefreshExpiresIn: refreshExpiresIn,
-		User:             user,
+		ExpiresIn:        result.AccessToken.ExpiresIn,
+		RefreshToken:     result.RefreshToken.Token,
+		RefreshExpiresIn: result.RefreshToken.ExpiresIn,
+		User: model.UserResponse{
+			ID:       result.User.UserID,
+			Username: result.User.Username,
+			Role:     result.User.Role,
+		},
 	})
+}
+
+func (h *AuthHandler) Refresh(c *gin.Context) {
+	var req model.RefreshRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+			Error: "invalid request body",
+		})
+		return
+	}
+
+	result, err := h.authService.Refresh(c.Request.Context(), req.RefreshToken)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidRefreshToken) {
+			c.JSON(http.StatusUnauthorized, model.ErrorResponse{
+				Error: "invalid refresh token",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: "internal server error",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.RefreshResponse{
+		AccessToken: result.AccessToken.Token,
+		TokenType:   "Bearer",
+		ExpiresIn:   result.AccessToken.ExpiresIn,
+	})
+}
+
+func (h *AuthHandler) Logout(c *gin.Context) {
+	var req model.LogoutRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+			Error: "invalid request body",
+		})
+		return
+	}
+
+	err := h.authService.Logout(c.Request.Context(), req.RefreshToken)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidRefreshToken) {
+			c.JSON(http.StatusUnauthorized, model.ErrorResponse{
+				Error: "invalid refresh token",
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: "internal server error",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.OKResponse{OK: true})
 }
 
 func (h *AuthHandler) Me(c *gin.Context) {
@@ -83,7 +150,7 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		return
 	}
 
-	user, ok := value.(model.AuthUser)
+	accessIdentity, ok := value.(service.AccessIdentity)
 	if !ok {
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Error: "invalid current user context",
@@ -92,8 +159,8 @@ func (h *AuthHandler) Me(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, model.UserResponse{
-		ID:       user.ID,
-		Username: user.Username,
-		Role:     user.Role,
+		ID:       accessIdentity.UserID,
+		Username: accessIdentity.Username,
+		Role:     accessIdentity.Role,
 	})
 }
