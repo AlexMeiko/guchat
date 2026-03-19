@@ -138,7 +138,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, model.OKResponse{OK: true})
+	c.Status(http.StatusNoContent)
 }
 
 func (h *AuthHandler) Me(c *gin.Context) {

@@ -5,6 +5,7 @@ import (
 
 	"github.com/AlexMeiko/guchat/internal/config"
 	"github.com/AlexMeiko/guchat/internal/db"
+	"github.com/AlexMeiko/guchat/internal/generator"
 	"github.com/AlexMeiko/guchat/internal/handler"
 	"github.com/AlexMeiko/guchat/internal/repository"
 	"github.com/AlexMeiko/guchat/internal/router"
@@ -52,7 +53,15 @@ func main() {
 	modelService := service.NewModelService(modelRepo)
 	modelHandler := handler.NewModelHandler(modelService)
 
-	r := router.New(authHandler, conversationHandler, messageHandler, modelHandler, jwtService)
+	fakeGenerator := generator.NewFakeGenerator()
+	generatorFactory := generator.NewFactory(map[string]service.Generator{
+		"openai": fakeGenerator,
+	})
+
+	generationService := service.NewGenerationService(messageService, modelService, generatorFactory)
+	generationHandler := handler.NewGenerationHandler(generationService)
+
+	r := router.New(authHandler, conversationHandler, messageHandler, modelHandler, generationHandler, jwtService)
 	log.Printf("server starting on port %s", cfg.Port)
 
 	if err := r.Run(":" + cfg.Port); err != nil {

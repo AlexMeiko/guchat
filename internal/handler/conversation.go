@@ -165,7 +165,7 @@ func (h *ConversationHandler) Update(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, model.OKResponse{OK: true})
+	c.Status(http.StatusNoContent)
 }
 
 func (h *ConversationHandler) Delete(c *gin.Context) {
@@ -197,5 +197,5 @@ func (h *ConversationHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, model.OKResponse{OK: true})
+	c.Status(http.StatusNoContent)
 }

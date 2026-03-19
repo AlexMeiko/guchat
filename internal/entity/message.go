@@ -2,6 +2,18 @@ package entity
 
 import "time"
 
+const (
+	MessageRoleUser      = "user"
+	MessageRoleAssistant = "assistant"
+)
+
+const (
+	MessageStatusPending   = "pending"
+	MessageStatusStreaming = "streaming"
+	MessageStatusDone      = "done"
+	MessageStatusFailed    = "failed"
+)
+
 type Message struct {
 	ID               string    `db:"id"`
 	ConversationID   string    `db:"conversation_id"`
