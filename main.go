@@ -48,7 +48,11 @@ func main() {
 	messageService := service.NewMessageService(conversationRepo, messageRepo)
 	messageHandler := handler.NewMessageHandler(messageService)
 
-	r := router.New(authHandler, conversationHandler, messageHandler, jwtService)
+	modelRepo := repository.NewModelRepository(mysqlDB)
+	modelService := service.NewModelService(modelRepo)
+	modelHandler := handler.NewModelHandler(modelService)
+
+	r := router.New(authHandler, conversationHandler, messageHandler, modelHandler, jwtService)
 	log.Printf("server starting on port %s", cfg.Port)
 
 	if err := r.Run(":" + cfg.Port); err != nil {

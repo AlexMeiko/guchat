@@ -53,3 +53,17 @@ CREATE TABLE messages
         FOREIGN KEY (conversation_id) REFERENCES conversations (id)
             ON DELETE CASCADE
 ) ENGINE = InnoDB;
+
+CREATE TABLE models
+(
+    id         BIGINT PRIMARY KEY AUTO_INCREMENT,
+    name       VARCHAR(64)  NOT NULL,
+    provider   VARCHAR(32)  NOT NULL,
+    model_key  VARCHAR(64) NOT NULL,
+    base_url   VARCHAR(255) NOT NULL,
+    api_key    VARCHAR(255) NOT NULL,
+    is_enabled BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE = InnoDB;
+
