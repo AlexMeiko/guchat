@@ -11,6 +11,7 @@ func New(
 	authHandler *handler.AuthHandler,
 	conversationHandler *handler.ConversationHandler,
 	messageHandler *handler.MessageHandler,
+	modelHandler *handler.ModelHandler,
 	jwtService *service.JWTService,
 ) *gin.Engine {
 	r := gin.Default()
@@ -42,6 +43,15 @@ func New(
 			conversation.GET("/:conversation_id/messages/:message_id", messageHandler.GetByIDAndConversationID)
 			conversation.PATCH("/:conversation_id/messages/:message_id", messageHandler.UpdateContentByIDAndConversationID)
 			conversation.DELETE("/:conversation_id/messages/:message_id", messageHandler.DeleteByIDAndConversationID)
+		}
+
+		models := api.Group("/models", middleware.Auth(jwtService))
+		{
+			models.GET("", modelHandler.ListEnabled)
+			models.POST("", modelHandler.Create)
+			models.GET("/:id", modelHandler.Get)
+			models.PATCH("/:id", modelHandler.Update)
+			models.DELETE("/:id", modelHandler.Delete)
 		}
 	}
 
