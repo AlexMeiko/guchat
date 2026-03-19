@@ -38,14 +38,17 @@ func main() {
 		refreshTokenRepo,
 		jwtService,
 	)
+	authHandler := handler.NewAuthHandler(authService)
 
 	conversationRepo := repository.NewConversationRepository(mysqlDB)
 	conversationService := service.NewConversationService(conversationRepo)
-
-	authHandler := handler.NewAuthHandler(authService)
 	conversationHandler := handler.NewConversationHandler(conversationService)
 
-	r := router.New(authHandler, conversationHandler, jwtService)
+	messageRepo := repository.NewMessageRepository(mysqlDB)
+	messageService := service.NewMessageService(conversationRepo, messageRepo)
+	messageHandler := handler.NewMessageHandler(messageService)
+
+	r := router.New(authHandler, conversationHandler, messageHandler, jwtService)
 	log.Printf("server starting on port %s", cfg.Port)
 
 	if err := r.Run(":" + cfg.Port); err != nil {

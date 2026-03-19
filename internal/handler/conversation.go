@@ -97,7 +97,7 @@ func (h *ConversationHandler) List(c *gin.Context) {
 }
 
 func (h *ConversationHandler) Get(c *gin.Context) {
-	id := c.Param("id")
+	id := c.Param("conversation_id")
 	if _, err := uuid.Parse(id); err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{
 			Error: "invalid conversation id",
@@ -129,7 +129,7 @@ func (h *ConversationHandler) Get(c *gin.Context) {
 }
 
 func (h *ConversationHandler) Update(c *gin.Context) {
-	id := c.Param("id")
+	id := c.Param("conversation_id")
 	if _, err := uuid.Parse(id); err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{
 			Error: "invalid conversation id",
@@ -169,7 +169,7 @@ func (h *ConversationHandler) Update(c *gin.Context) {
 }
 
 func (h *ConversationHandler) Delete(c *gin.Context) {
-	id := c.Param("id")
+	id := c.Param("conversation_id")
 	if _, err := uuid.Parse(id); err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{
 			Error: "invalid conversation id",
