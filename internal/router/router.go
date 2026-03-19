@@ -10,6 +10,7 @@ import (
 func New(
 	authHandler *handler.AuthHandler,
 	conversationHandler *handler.ConversationHandler,
+	messageHandler *handler.MessageHandler,
 	jwtService *service.JWTService,
 ) *gin.Engine {
 	r := gin.Default()
@@ -31,9 +32,16 @@ func New(
 		{
 			conversation.GET("", conversationHandler.List)
 			conversation.POST("", conversationHandler.Create)
-			conversation.GET("/:id", conversationHandler.Get)
-			conversation.PATCH("/:id", conversationHandler.Update)
-			conversation.DELETE("/:id", conversationHandler.Delete)
+
+			conversation.GET("/:conversation_id", conversationHandler.Get)
+			conversation.PATCH("/:conversation_id", conversationHandler.Update)
+			conversation.DELETE("/:conversation_id", conversationHandler.Delete)
+
+			conversation.GET("/:conversation_id/messages", messageHandler.ListByConversationID)
+			conversation.POST("/:conversation_id/messages", messageHandler.Create)
+			conversation.GET("/:conversation_id/messages/:message_id", messageHandler.GetByIDAndConversationID)
+			conversation.PATCH("/:conversation_id/messages/:message_id", messageHandler.UpdateContentByIDAndConversationID)
+			conversation.DELETE("/:conversation_id/messages/:message_id", messageHandler.DeleteByIDAndConversationID)
 		}
 	}
 

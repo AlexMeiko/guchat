@@ -24,7 +24,7 @@ func (r *ConversationRepository) Create(ctx context.Context, conversation *entit
 }
 
 func (r *ConversationRepository) ListByUserID(ctx context.Context, userID int64) ([]entity.Conversation, error) {
-	const query = `SELECT * FROM conversations WHERE user_id = ? ORDER BY created_at DESC`
+	const query = `SELECT * FROM conversations WHERE user_id = ? ORDER BY updated_at DESC, id DESC`
 
 	var conversations []entity.Conversation
 	if err := r.db.SelectContext(ctx, &conversations, query, userID); err != nil {
@@ -74,4 +74,11 @@ func (r *ConversationRepository) DeleteByIDAndUserID(ctx context.Context, conver
 	}
 
 	return n > 0, nil
+}
+
+func (r *ConversationRepository) TouchByIDAndUserID(ctx context.Context, conversationID string, userID int64) error {
+	const query = `UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`
+
+	_, err := r.db.ExecContext(ctx, query, conversationID, userID)
+	return err
 }
