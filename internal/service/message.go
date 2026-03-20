@@ -32,6 +32,15 @@ type MessageService struct {
 	messageRepo      *repository.MessageRepository
 }
 
+type UpdateGeneratedMessageInput struct {
+	ConversationID   string
+	MessageID        string
+	Content          string
+	ReasoningContent string
+	Status           string
+	ErrorMessage     string
+}
+
 func NewMessageService(
 	conversationRepo *repository.ConversationRepository,
 	messageRepo *repository.MessageRepository,
@@ -91,6 +100,19 @@ func (s *MessageService) ListByConversationID(ctx context.Context, userID int64,
 	return s.messageRepo.ListByConversationID(ctx, conversationID)
 }
 
+func (s *MessageService) ListByConversationIDBeforeOrEqualSeq(
+	ctx context.Context,
+	userID int64,
+	conversationID string,
+	seq int,
+) ([]entity.Message, error) {
+	if err := s.ensureConversationOwned(ctx, userID, conversationID); err != nil {
+		return nil, err
+	}
+
+	return s.messageRepo.ListByConversationIDBeforeOrEqualSeq(ctx, conversationID, seq)
+}
+
 func (s *MessageService) GetByIDAndConversationID(ctx context.Context, userID int64, conversationID, messageID string) (*entity.Message, error) {
 	if err := s.ensureConversationOwned(ctx, userID, conversationID); err != nil {
 		return nil, err
@@ -144,6 +166,43 @@ func (s *MessageService) DeleteByIDAndConversationID(ctx context.Context, userID
 	}
 
 	return s.conversationRepo.TouchByIDAndUserID(ctx, conversationID, userID)
+}
+
+// 供generation使用
+func (s *MessageService) UpdateGeneratedMessage(
+	ctx context.Context,
+	userID int64,
+	input UpdateGeneratedMessageInput,
+) error {
+	if err := s.ensureConversationOwned(ctx, userID, input.ConversationID); err != nil {
+		return err
+	}
+
+	message := &entity.Message{
+		ID:               input.MessageID,
+		ConversationID:   input.ConversationID,
+		Content:          input.Content,
+		ReasoningContent: input.ReasoningContent,
+		Status:           input.Status,
+		ErrorMessage:     input.ErrorMessage,
+	}
+
+	updated, err := s.messageRepo.UpdateByIDAndConversationID(ctx, message)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return ErrMessageNotFound
+	}
+
+	return nil
+}
+
+func (s *MessageService) RecoverInterruptedGenerations(ctx context.Context) (int64, error) {
+	return s.messageRepo.FailUnfinishedMsg(
+		ctx,
+		"generation interrupted by server restart",
+	)
 }
 
 func (s *MessageService) nextSeqForCreate(ctx context.Context, conversationID, prevID string) (int, error) {

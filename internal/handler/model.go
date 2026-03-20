@@ -194,7 +194,7 @@ func (h *ModelHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, model.OKResponse{OK: true})
+	c.Status(http.StatusNoContent)
 }
 
 func newModelDetailResponse(modelConfig *entity.ModelConfig) model.ModelDetailResponse {

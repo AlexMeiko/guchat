@@ -12,6 +12,7 @@ func New(
 	conversationHandler *handler.ConversationHandler,
 	messageHandler *handler.MessageHandler,
 	modelHandler *handler.ModelHandler,
+	generationHandler *handler.GenerationHandler,
 	jwtService *service.JWTService,
 ) *gin.Engine {
 	r := gin.Default()
@@ -43,6 +44,10 @@ func New(
 			conversation.GET("/:conversation_id/messages/:message_id", messageHandler.GetByIDAndConversationID)
 			conversation.PATCH("/:conversation_id/messages/:message_id", messageHandler.UpdateContentByIDAndConversationID)
 			conversation.DELETE("/:conversation_id/messages/:message_id", messageHandler.DeleteByIDAndConversationID)
+
+			conversation.POST("/:conversation_id/messages/:message_id/generation", generationHandler.Create)
+			conversation.GET("/:conversation_id/messages/:message_id/events", generationHandler.Events)
+
 		}
 
 		models := api.Group("/models", middleware.Auth(jwtService))

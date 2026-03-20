@@ -57,6 +57,21 @@ func (r *MessageRepository) ListByConversationID(ctx context.Context, conversati
 	return messages, nil
 }
 
+func (r *MessageRepository) ListByConversationIDBeforeOrEqualSeq(
+	ctx context.Context,
+	conversationID string,
+	seq int,
+) ([]entity.Message, error) {
+	const query = `SELECT * FROM messages WHERE conversation_id = ? AND seq <= ? ORDER BY seq ASC`
+
+	var messages []entity.Message
+	if err := r.db.SelectContext(ctx, &messages, query, conversationID, seq); err != nil {
+		return nil, err
+	}
+
+	return messages, nil
+}
+
 func (r *MessageRepository) GetByID(ctx context.Context, messageID string) (*entity.Message, error) {
 	const query = `SELECT * FROM messages WHERE id = ?`
 
@@ -131,4 +146,61 @@ func (r *MessageRepository) DeleteByIDAndConversationID(ctx context.Context, mes
 	}
 
 	return n > 0, nil
+}
+
+func (r *MessageRepository) UpdateByIDAndConversationID(ctx context.Context, message *entity.Message) (bool, error) {
+	const query = `
+		UPDATE messages
+		SET
+			content = ?,
+			reasoning_content = ?,
+			status = ?,
+			error_message = ?
+		WHERE id = ? AND conversation_id = ?
+	`
+
+	result, err := r.db.ExecContext(
+		ctx,
+		query,
+		message.Content,
+		message.ReasoningContent,
+		message.Status,
+		message.ErrorMessage,
+		message.ID,
+		message.ConversationID,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return n > 0, nil
+}
+
+func (r *MessageRepository) FailUnfinishedMsg(ctx context.Context, errorMessage string) (int64, error) {
+	const query = `UPDATE messages SET status = ?, error_message = ? WHERE role = ? AND status IN (?, ?)`
+
+	result, err := r.db.ExecContext(
+		ctx,
+		query,
+		entity.MessageStatusFailed,
+		errorMessage,
+		entity.MessageRoleAssistant,
+		entity.MessageStatusPending,
+		entity.MessageStatusStreaming,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+
+	return n, nil
 }

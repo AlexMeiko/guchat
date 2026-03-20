@@ -7,16 +7,21 @@ import (
 	"github.com/AlexMeiko/guchat/internal/entity"
 	"github.com/AlexMeiko/guchat/internal/model"
 	"github.com/AlexMeiko/guchat/internal/service"
+	"github.com/AlexMeiko/guchat/internal/stream"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
 type MessageHandler struct {
 	messageService *service.MessageService
+	runtimeManager *stream.Manager
 }
 
-func NewMessageHandler(messageService *service.MessageService) *MessageHandler {
-	return &MessageHandler{messageService: messageService}
+func NewMessageHandler(messageService *service.MessageService, runtimeManager *stream.Manager) *MessageHandler {
+	return &MessageHandler{
+		messageService: messageService,
+		runtimeManager: runtimeManager,
+	}
 }
 
 func newMessageResponse(message *entity.Message) model.MessageResponse {
@@ -235,5 +240,8 @@ func (h *MessageHandler) DeleteByIDAndConversationID(c *gin.Context) {
 		return
 	}
 
+	if task, ok := h.runtimeManager.Get(messageID); ok {
+		task.Cancel("message deleted by user")
+	}
 	c.Status(http.StatusNoContent)
 }

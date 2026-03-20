@@ -10,11 +10,13 @@ import (
 )
 
 type Config struct {
-	Port          string
-	DatabaseURL   string
-	JWTSecret     string
-	JWTAccessTTL  int64
-	JWTRefreshTTL int64
+	Port                    string
+	DatabaseURL             string
+	JWTSecret               string
+	JWTAccessTTL            int64
+	JWTRefreshTTL           int64
+	GenerationRetryInterval int64
+	GenerationRetryMax      int64
 }
 
 func Load() (Config, error) {
@@ -31,11 +33,13 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		Port:          getEnv("PORT", "8080"),
-		DatabaseURL:   databaseURL,
-		JWTSecret:     jwtSecret,
-		JWTAccessTTL:  getEnvInt64("JWT_ACCESS_TTL_SECONDS", 3600),
-		JWTRefreshTTL: getEnvInt64("JWT_REFRESH_TTL_SECONDS", 2592000),
+		Port:                    getEnv("PORT", "8080"),
+		DatabaseURL:             databaseURL,
+		JWTSecret:               jwtSecret,
+		JWTAccessTTL:            getEnvInt64("JWT_ACCESS_TTL_SECONDS", 3600),
+		JWTRefreshTTL:           getEnvInt64("JWT_REFRESH_TTL_SECONDS", 2592000),
+		GenerationRetryInterval: max(getEnvInt64("GENERATION_RETRY_INTERVAL_SECONDS", 30), 1),
+		GenerationRetryMax:      max(getEnvInt64("GENERATION_RETRY_MAX", 5), 1),
 	}, nil
 }
 
