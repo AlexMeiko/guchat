@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"context"
 	"strings"
 	"sync"
 
@@ -22,12 +23,14 @@ type Task struct {
 	content          strings.Builder
 	reasoningContent strings.Builder
 	errorMessage     string
+	cancel           context.CancelFunc
 }
 
-func NewTask(messageID string) *Task {
+func NewTask(messageID string, cancel context.CancelFunc) *Task {
 	return &Task{
 		messageID: messageID,
 		status:    entity.MessageStatusPending,
+		cancel:    cancel,
 	}
 }
 
@@ -36,6 +39,50 @@ func (t *Task) Start() {
 	defer t.mu.Unlock()
 
 	t.status = entity.MessageStatusStreaming
+}
+
+func (t *Task) Cancel(errMsg string) {
+	t.mu.Lock()
+
+	if t.status == entity.MessageStatusDone || t.status == entity.MessageStatusFailed {
+		t.mu.Unlock()
+		return
+	}
+
+	t.status = entity.MessageStatusFailed
+	t.errorMessage = errMsg
+	cancel := t.cancel
+	t.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (t *Task) Done() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// cancelled
+	if t.status == entity.MessageStatusFailed {
+		return
+	}
+
+	t.status = entity.MessageStatusDone
+	t.errorMessage = ""
+}
+
+func (t *Task) Failed(errMsg string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// cancelled
+	if t.status == entity.MessageStatusFailed && t.errorMessage != "" {
+		return
+	}
+
+	t.status = entity.MessageStatusFailed
+	t.errorMessage = errMsg
 }
 
 func (t *Task) AppendContent(delta string) {
@@ -58,22 +105,6 @@ func (t *Task) AppendReasoningContent(delta string) {
 	defer t.mu.Unlock()
 
 	t.reasoningContent.WriteString(delta)
-}
-
-func (t *Task) Done() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	t.status = entity.MessageStatusDone
-	t.errorMessage = ""
-}
-
-func (t *Task) Failed(errMsg string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	t.status = entity.MessageStatusFailed
-	t.errorMessage = errMsg
 }
 
 func (t *Task) Snapshot() Snapshot {
@@ -100,11 +131,11 @@ func NewManager() *Manager {
 	}
 }
 
-func (m *Manager) Create(messageID string) *Task {
+func (m *Manager) Create(messageID string, cancel context.CancelFunc) *Task {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.tasks[messageID] = NewTask(messageID)
+	m.tasks[messageID] = NewTask(messageID, cancel)
 	return m.tasks[messageID]
 }
 

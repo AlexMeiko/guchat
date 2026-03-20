@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/AlexMeiko/guchat/internal/config"
 	"github.com/AlexMeiko/guchat/internal/db"
@@ -49,7 +50,10 @@ func main() {
 
 	messageRepo := repository.NewMessageRepository(mysqlDB)
 	messageService := service.NewMessageService(conversationRepo, messageRepo)
-	messageHandler := handler.NewMessageHandler(messageService)
+
+	runtimeManager := stream.NewManager()
+
+	messageHandler := handler.NewMessageHandler(messageService, runtimeManager)
 
 	modelRepo := repository.NewModelRepository(mysqlDB)
 	modelService := service.NewModelService(modelRepo)
@@ -67,9 +71,17 @@ func main() {
 		"openai": fakeGenerator,
 	})
 
-	runtimeManager := stream.NewManager()
-	generationService := service.NewGenerationService(messageService, modelService, generatorFactory, runtimeManager)
+	generationService := service.NewGenerationService(
+		messageService,
+		modelService,
+		generatorFactory,
+		runtimeManager,
+		time.Duration(cfg.GenerationRetryInterval)*time.Second,
+		int(cfg.GenerationRetryMax),
+	)
 	generationHandler := handler.NewGenerationHandler(generationService, messageService, runtimeManager)
+
+	go generationService.RetryLoop(context.Background())
 
 	r := router.New(authHandler, conversationHandler, messageHandler, modelHandler, generationHandler, jwtService)
 	log.Printf("server starting on port %s", cfg.Port)

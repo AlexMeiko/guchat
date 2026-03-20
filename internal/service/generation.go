@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
+	"time"
 
 	"github.com/AlexMeiko/guchat/internal/entity"
 	"github.com/AlexMeiko/guchat/internal/stream"
@@ -19,11 +21,23 @@ type CreateGenerationInput struct {
 	ModelID         int64
 }
 
+type generationRetryItem struct {
+	UserID         int64
+	ConversationID string
+	MessageID      string
+	RetryCount     int
+}
+
 type GenerationService struct {
 	messageService   *MessageService
 	modelService     *ModelService
 	generatorFactory GeneratorFactory
 	runtimeManager   *stream.Manager
+	retryInterval    time.Duration
+	retryMax         int
+
+	retryMu    sync.Mutex
+	retryItems map[string]*generationRetryItem
 }
 
 func NewGenerationService(
@@ -31,12 +45,17 @@ func NewGenerationService(
 	modelService *ModelService,
 	generatorFactory GeneratorFactory,
 	runtimeManager *stream.Manager,
+	retryInterval time.Duration,
+	retryMax int,
 ) *GenerationService {
 	return &GenerationService{
 		messageService:   messageService,
 		modelService:     modelService,
 		generatorFactory: generatorFactory,
 		runtimeManager:   runtimeManager,
+		retryInterval:    retryInterval,
+		retryMax:         retryMax,
+		retryItems:       make(map[string]*generationRetryItem),
 	}
 }
 
@@ -77,11 +96,12 @@ func (s *GenerationService) Create(
 		return nil, err
 	}
 
-	s.runtimeManager.Create(assistantMsg.ID)
+	processCtx, cancel := context.WithCancel(context.Background())
+	s.runtimeManager.Create(assistantMsg.ID, cancel)
 
 	go func() {
 		_ = s.Process(
-			context.Background(),
+			processCtx,
 			userID,
 			input.ConversationID,
 			assistantMsg.ID,
@@ -118,9 +138,15 @@ func (s *GenerationService) Process(
 			Status:           snapshot.Status,
 			ErrorMessage:     snapshot.ErrorMessage,
 		}); err != nil {
+			if s.shouldRetry(err) {
+				s.addRetry(userID, conversationID, assistantMessageID)
+			} else {
+				s.runtimeManager.Delete(assistantMessageID)
+			}
 			return errors.Join(cause, err)
 		}
 
+		s.runtimeManager.Delete(assistantMessageID)
 		return cause
 	}
 
@@ -183,9 +209,106 @@ func (s *GenerationService) Process(
 		Status:           snapshot.Status,
 		ErrorMessage:     snapshot.ErrorMessage,
 	}); err != nil {
-		return fail(err)
+		if s.shouldRetry(err) {
+			s.addRetry(userID, conversationID, assistantMessageID)
+		} else {
+			s.runtimeManager.Delete(assistantMessageID)
+		}
+		return err
 	}
 
 	s.runtimeManager.Delete(assistantMessageID)
 	return nil
+}
+
+func (s *GenerationService) RetryLoop(ctx context.Context) {
+	ticker := time.NewTicker(s.retryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.Retry()
+		}
+	}
+}
+
+func (s *GenerationService) addRetry(userID int64, conversationID, messageID string) {
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+
+	if _, exists := s.retryItems[messageID]; exists {
+		return
+	}
+
+	s.retryItems[messageID] = &generationRetryItem{
+		UserID:         userID,
+		ConversationID: conversationID,
+		MessageID:      messageID,
+		RetryCount:     0,
+	}
+}
+
+func (s *GenerationService) Retry() {
+	// 切片主要是为了分离数据库操作，避免在持锁状态下进行数据库读写，导致长时间占用锁致使其他业务无法读取或写入map
+	s.retryMu.Lock()
+	items := make([]generationRetryItem, 0, len(s.retryItems))
+	for _, item := range s.retryItems {
+		items = append(items, *item)
+	}
+	s.retryMu.Unlock()
+
+	for _, item := range items {
+		if item.RetryCount >= s.retryMax {
+			s.removeRetry(item.MessageID)
+			s.runtimeManager.Delete(item.MessageID)
+			continue
+		}
+
+		task, ok := s.runtimeManager.Get(item.MessageID)
+		if !ok {
+			s.removeRetry(item.MessageID)
+			continue
+		}
+
+		snapshot := task.Snapshot()
+		err := s.messageService.UpdateGeneratedMessage(context.Background(), item.UserID, UpdateGeneratedMessageInput{
+			ConversationID:   item.ConversationID,
+			MessageID:        item.MessageID,
+			Content:          snapshot.Content,
+			ReasoningContent: snapshot.ReasoningContent,
+			Status:           snapshot.Status,
+			ErrorMessage:     snapshot.ErrorMessage,
+		})
+		if err != nil {
+			if !s.shouldRetry(err) {
+				s.removeRetry(item.MessageID)
+				s.runtimeManager.Delete(item.MessageID)
+				continue
+			}
+
+			s.retryMu.Lock()
+			if current, exists := s.retryItems[item.MessageID]; exists {
+				current.RetryCount++
+			}
+			s.retryMu.Unlock()
+			continue
+		}
+
+		s.removeRetry(item.MessageID)
+		s.runtimeManager.Delete(item.MessageID)
+	}
+}
+
+func (s *GenerationService) removeRetry(messageID string) {
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+
+	delete(s.retryItems, messageID)
+}
+
+func (s *GenerationService) shouldRetry(err error) bool {
+	return !errors.Is(err, ErrConversationNotFound) && !errors.Is(err, ErrMessageNotFound)
 }
