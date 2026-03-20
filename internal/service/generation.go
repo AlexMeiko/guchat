@@ -5,10 +5,12 @@ import (
 	"errors"
 
 	"github.com/AlexMeiko/guchat/internal/entity"
+	"github.com/AlexMeiko/guchat/internal/stream"
 )
 
 var (
-	ErrModelDisabled = errors.New("model disabled")
+	ErrModelDisabled          = errors.New("model disabled")
+	ErrGenerationTaskNotFound = errors.New("generation task not found")
 )
 
 type CreateGenerationInput struct {
@@ -21,17 +23,20 @@ type GenerationService struct {
 	messageService   *MessageService
 	modelService     *ModelService
 	generatorFactory GeneratorFactory
+	runtimeManager   *stream.Manager
 }
 
 func NewGenerationService(
 	messageService *MessageService,
 	modelService *ModelService,
 	generatorFactory GeneratorFactory,
+	runtimeManager *stream.Manager,
 ) *GenerationService {
 	return &GenerationService{
 		messageService:   messageService,
 		modelService:     modelService,
 		generatorFactory: generatorFactory,
+		runtimeManager:   runtimeManager,
 	}
 }
 
@@ -72,6 +77,8 @@ func (s *GenerationService) Create(
 		return nil, err
 	}
 
+	s.runtimeManager.Create(assistantMsg.ID)
+
 	go func() {
 		_ = s.Process(
 			context.Background(),
@@ -94,22 +101,23 @@ func (s *GenerationService) Process(
 	sourceMessageSeq int,
 	modelID int64,
 ) error {
-	fail := func(result *GenerateResult, cause error) error {
-		input := UpdateGeneratedMessageInput{
+	task, ok := s.runtimeManager.Get(assistantMessageID)
+	if !ok {
+		return ErrGenerationTaskNotFound
+	}
+
+	fail := func(cause error) error {
+		task.Failed(cause.Error())
+		snapshot := task.Snapshot()
+
+		if err := s.messageService.UpdateGeneratedMessage(ctx, userID, UpdateGeneratedMessageInput{
 			ConversationID:   conversationID,
 			MessageID:        assistantMessageID,
-			Content:          "",
-			ReasoningContent: "",
-			Status:           entity.MessageStatusFailed,
-			ErrorMessage:     cause.Error(),
-		}
-
-		if result != nil {
-			input.Content = result.Content
-			input.ReasoningContent = result.ReasoningContent
-		}
-
-		if err := s.messageService.UpdateGeneratedMessage(ctx, userID, input); err != nil {
+			Content:          snapshot.Content,
+			ReasoningContent: snapshot.ReasoningContent,
+			Status:           snapshot.Status,
+			ErrorMessage:     snapshot.ErrorMessage,
+		}); err != nil {
 			return errors.Join(cause, err)
 		}
 
@@ -118,11 +126,11 @@ func (s *GenerationService) Process(
 
 	modelConfig, err := s.modelService.GetByID(ctx, modelID)
 	if err != nil {
-		return fail(nil, err)
+		return fail(err)
 	}
 
 	if !modelConfig.IsEnabled {
-		return fail(nil, ErrModelDisabled)
+		return fail(ErrModelDisabled)
 	}
 
 	messages, err := s.messageService.ListByConversationIDBeforeOrEqualSeq(
@@ -132,32 +140,52 @@ func (s *GenerationService) Process(
 		sourceMessageSeq,
 	)
 	if err != nil {
-		return fail(nil, err)
+		return fail(err)
 	}
 
 	generator, err := s.generatorFactory.Get(modelConfig)
 	if err != nil {
-		return fail(nil, err)
+		return fail(err)
 	}
 
-	result, err := generator.Generate(ctx, GenerateInput{
-		Model:    modelConfig,
-		Messages: messages,
-	})
-	if err != nil {
-		return fail(result, err)
-	}
+	task.Start()
 
-	if result == nil {
-		return fail(nil, errors.New("generator returned nil result"))
-	}
-
-	return s.messageService.UpdateGeneratedMessage(ctx, userID, UpdateGeneratedMessageInput{
+	if err := s.messageService.UpdateGeneratedMessage(ctx, userID, UpdateGeneratedMessageInput{
 		ConversationID:   conversationID,
 		MessageID:        assistantMessageID,
-		Content:          result.Content,
-		ReasoningContent: result.ReasoningContent,
-		Status:           entity.MessageStatusDone,
+		Content:          "",
+		ReasoningContent: "",
+		Status:           entity.MessageStatusStreaming,
 		ErrorMessage:     "",
+	}); err != nil {
+		return fail(err)
+	}
+
+	err = generator.Generate(ctx, GenerateInput{
+		Model:    modelConfig,
+		Messages: messages,
+	}, GenerateCallbacks{
+		task.AppendContent,
+		task.AppendReasoningContent,
 	})
+	if err != nil {
+		return fail(err)
+	}
+
+	task.Done()
+	snapshot := task.Snapshot()
+
+	if err := s.messageService.UpdateGeneratedMessage(ctx, userID, UpdateGeneratedMessageInput{
+		ConversationID:   conversationID,
+		MessageID:        assistantMessageID,
+		Content:          snapshot.Content,
+		ReasoningContent: snapshot.ReasoningContent,
+		Status:           snapshot.Status,
+		ErrorMessage:     snapshot.ErrorMessage,
+	}); err != nil {
+		return fail(err)
+	}
+
+	s.runtimeManager.Delete(assistantMessageID)
+	return nil
 }

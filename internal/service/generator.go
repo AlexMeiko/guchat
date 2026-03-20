@@ -14,13 +14,13 @@ type GenerateInput struct {
 	Messages []entity.Message
 }
 
-type GenerateResult struct {
-	Content          string
-	ReasoningContent string
+type GenerateCallbacks struct {
+	ContentDelta   func(string)
+	ReasoningDelta func(string)
 }
 
 type Generator interface {
-	Generate(ctx context.Context, input GenerateInput) (*GenerateResult, error)
+	Generate(ctx context.Context, input GenerateInput, cb GenerateCallbacks) error
 }
 
 type GeneratorFactory interface {

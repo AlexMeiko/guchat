@@ -46,6 +46,7 @@ func New(
 			conversation.DELETE("/:conversation_id/messages/:message_id", messageHandler.DeleteByIDAndConversationID)
 
 			conversation.POST("/:conversation_id/messages/:message_id/generation", generationHandler.Create)
+			conversation.GET("/:conversation_id/messages/:message_id/events", generationHandler.Events)
 
 		}
 

@@ -180,3 +180,27 @@ func (r *MessageRepository) UpdateByIDAndConversationID(ctx context.Context, mes
 
 	return n > 0, nil
 }
+
+func (r *MessageRepository) FailUnfinishedMsg(ctx context.Context, errorMessage string) (int64, error) {
+	const query = `UPDATE messages SET status = ?, error_message = ? WHERE role = ? AND status IN (?, ?)`
+
+	result, err := r.db.ExecContext(
+		ctx,
+		query,
+		entity.MessageStatusFailed,
+		errorMessage,
+		entity.MessageRoleAssistant,
+		entity.MessageStatusPending,
+		entity.MessageStatusStreaming,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+
+	return n, nil
+}

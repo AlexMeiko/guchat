@@ -198,6 +198,13 @@ func (s *MessageService) UpdateGeneratedMessage(
 	return nil
 }
 
+func (s *MessageService) RecoverInterruptedGenerations(ctx context.Context) (int64, error) {
+	return s.messageRepo.FailUnfinishedMsg(
+		ctx,
+		"generation interrupted by server restart",
+	)
+}
+
 func (s *MessageService) nextSeqForCreate(ctx context.Context, conversationID, prevID string) (int, error) {
 	if prevID == "" {
 		lastSeq, err := s.messageRepo.GetLastSeqByConversationID(ctx, conversationID)

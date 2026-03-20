@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/AlexMeiko/guchat/internal/config"
@@ -10,6 +11,7 @@ import (
 	"github.com/AlexMeiko/guchat/internal/repository"
 	"github.com/AlexMeiko/guchat/internal/router"
 	"github.com/AlexMeiko/guchat/internal/service"
+	"github.com/AlexMeiko/guchat/internal/stream"
 )
 
 func main() {
@@ -51,6 +53,13 @@ func main() {
 
 	modelRepo := repository.NewModelRepository(mysqlDB)
 	modelService := service.NewModelService(modelRepo)
+
+	recovered, err := messageService.RecoverInterruptedGenerations(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("recovered %d interrupted generations", recovered)
+
 	modelHandler := handler.NewModelHandler(modelService)
 
 	fakeGenerator := generator.NewFakeGenerator()
@@ -58,8 +67,9 @@ func main() {
 		"openai": fakeGenerator,
 	})
 
-	generationService := service.NewGenerationService(messageService, modelService, generatorFactory)
-	generationHandler := handler.NewGenerationHandler(generationService)
+	runtimeManager := stream.NewManager()
+	generationService := service.NewGenerationService(messageService, modelService, generatorFactory, runtimeManager)
+	generationHandler := handler.NewGenerationHandler(generationService, messageService, runtimeManager)
 
 	r := router.New(authHandler, conversationHandler, messageHandler, modelHandler, generationHandler, jwtService)
 	log.Printf("server starting on port %s", cfg.Port)
