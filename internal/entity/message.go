@@ -3,6 +3,7 @@ package entity
 import "time"
 
 const (
+	MessageRoleSystem    = "system"
 	MessageRoleUser      = "user"
 	MessageRoleAssistant = "assistant"
 )

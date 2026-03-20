@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/AlexMeiko/guchat/internal/config"
@@ -66,9 +67,21 @@ func main() {
 
 	modelHandler := handler.NewModelHandler(modelService)
 
-	fakeGenerator := generator.NewFakeGenerator()
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     0,
+		IdleConnTimeout:     60 * time.Second,
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   0,
+	}
+
 	generatorFactory := generator.NewFactory(map[string]service.Generator{
-		"openai": fakeGenerator,
+		"openai": generator.NewOpenAIGenerator(client),
+		"fake":   generator.NewFakeGenerator(),
 	})
 
 	generationService := service.NewGenerationService(
