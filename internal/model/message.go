@@ -21,3 +21,9 @@ type MessageResponse struct {
 	ErrorMessage     string    `json:"error_message"`
 	CreatedAt        time.Time `json:"created_at"`
 }
+
+type ListMessagesResponse struct {
+	Items         []MessageResponse `json:"items"`
+	HasMore       bool              `json:"has_more"`
+	NextBeforeSeq *int              `json:"next_before_seq,omitempty"`
+}

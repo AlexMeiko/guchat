@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/AlexMeiko/guchat/internal/entity"
 	"github.com/AlexMeiko/guchat/internal/model"
@@ -44,12 +45,36 @@ func (h *MessageHandler) ListByConversationID(c *gin.Context) {
 		return
 	}
 
+	limit := 20
+	if raw := c.Query("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid limit"})
+			return
+		}
+		limit = parsed
+	}
+
+	var beforeSeq *int
+	if raw := c.Query("before_seq"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid before_seq"})
+			return
+		}
+		beforeSeq = &parsed
+	}
+
 	user, ok := requireCurrentUser(c)
 	if !ok {
 		return
 	}
 
-	messages, err := h.messageService.ListByConversationID(c.Request.Context(), user.UserID, conversationID)
+	result, err := h.messageService.ListPageByConversationID(c.Request.Context(), user.UserID, service.ListMessagesPageInput{
+		ConversationID: conversationID,
+		BeforeSeq:      beforeSeq,
+		Limit:          limit,
+	})
 	if err != nil {
 		if errors.Is(err, service.ErrConversationNotFound) {
 			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "conversation not found"})
@@ -60,12 +85,16 @@ func (h *MessageHandler) ListByConversationID(c *gin.Context) {
 		return
 	}
 
-	response := make([]model.MessageResponse, len(messages))
-	for i := range messages {
-		response[i] = newMessageResponse(&messages[i])
+	items := make([]model.MessageResponse, len(result.Messages))
+	for i := range result.Messages {
+		items[i] = newMessageResponse(&result.Messages[i])
 	}
 
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, model.ListMessagesResponse{
+		Items:         items,
+		HasMore:       result.HasMore,
+		NextBeforeSeq: result.NextBeforeSeq,
+	})
 }
 
 func (h *MessageHandler) Create(c *gin.Context) {

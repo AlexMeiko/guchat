@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sort"
 
 	"github.com/AlexMeiko/guchat/internal/entity"
 	"github.com/jmoiron/sqlx"
@@ -46,15 +47,37 @@ func (r *MessageRepository) Create(ctx context.Context, message *entity.Message)
 	return err
 }
 
-func (r *MessageRepository) ListByConversationID(ctx context.Context, conversationID string) ([]entity.Message, error) {
-	const query = `SELECT * FROM messages WHERE conversation_id = ? ORDER BY seq ASC`
-
+func (r *MessageRepository) ListPageByConversationID(
+	ctx context.Context,
+	conversationID string,
+	beforeSeq *int,
+	limit int,
+) ([]entity.Message, bool, error) {
+	queryLimit := limit + 1
 	var messages []entity.Message
-	if err := r.db.SelectContext(ctx, &messages, query, conversationID); err != nil {
-		return nil, err
+	var err error
+
+	if beforeSeq == nil {
+		const query = `SELECT * FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?`
+
+		err = r.db.SelectContext(ctx, &messages, query, conversationID, queryLimit)
+	} else {
+		const query = `SELECT * FROM messages WHERE conversation_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?`
+
+		err = r.db.SelectContext(ctx, &messages, query, conversationID, *beforeSeq, queryLimit)
 	}
 
-	return messages, nil
+	if err != nil {
+		return nil, false, err
+	}
+
+	hasMore := len(messages) > limit
+	if hasMore {
+		messages = messages[:limit]
+	}
+
+	reverseMessages(messages)
+	return messages, hasMore, nil
 }
 
 func (r *MessageRepository) ListByConversationIDBeforeOrEqualSeq(
@@ -68,6 +91,35 @@ func (r *MessageRepository) ListByConversationIDBeforeOrEqualSeq(
 	if err := r.db.SelectContext(ctx, &messages, query, conversationID, seq); err != nil {
 		return nil, err
 	}
+
+	return messages, nil
+}
+
+func (r *MessageRepository) ListGenerationContextByConversationID(
+	ctx context.Context,
+	conversationID string,
+	seq int,
+	nonSystemContextLimit int,
+) ([]entity.Message, error) {
+	const systemQuery = `SELECT * FROM messages WHERE conversation_id = ? AND seq <= ? AND role = ?`
+
+	var systemMessages []entity.Message
+	if err := r.db.SelectContext(ctx, &systemMessages, systemQuery, conversationID, seq, entity.MessageRoleSystem); err != nil {
+		return nil, err
+	}
+
+	var messages []entity.Message
+	if nonSystemContextLimit > 0 {
+		const userQuery = `SELECT * FROM messages WHERE conversation_id = ? AND seq <= ? AND role <> ? ORDER BY seq DESC LIMIT ?`
+		if err := r.db.SelectContext(ctx, &messages, userQuery, conversationID, seq, entity.MessageRoleSystem, nonSystemContextLimit); err != nil {
+			return nil, err
+		}
+	}
+
+	messages = append(messages, systemMessages...)
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].Seq < messages[j].Seq
+	})
 
 	return messages, nil
 }
@@ -203,4 +255,10 @@ func (r *MessageRepository) FailUnfinishedMsg(ctx context.Context, errorMessage 
 	}
 
 	return n, nil
+}
+
+func reverseMessages(messages []entity.Message) {
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
 }
