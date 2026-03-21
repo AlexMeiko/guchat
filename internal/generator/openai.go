@@ -11,15 +11,12 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/AlexMeiko/guchat/internal/entity"
 	"github.com/AlexMeiko/guchat/internal/service"
 )
 
 type OpenAIGenerator struct {
 	client *http.Client
 }
-
-var errOpenAIStreamDone = errors.New("stream done")
 
 func NewOpenAIGenerator(client *http.Client) *OpenAIGenerator {
 	if client == nil {
@@ -90,11 +87,6 @@ type openAIChatCompletionRequest struct {
 	Stream   bool                `json:"stream"`
 }
 
-type openAIChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
 type openAIChatCompletionChunk struct {
 	Choices []struct {
 		Delta struct {
@@ -118,29 +110,6 @@ func buildOpenAIChatCompletionsURL(baseURL string) string {
 	}
 
 	return baseURL + "/chat/completions"
-}
-
-func buildOpenAIChatMessages(messages []entity.Message) []openAIChatMessage {
-	result := make([]openAIChatMessage, 0, len(messages))
-
-	for _, message := range messages {
-		if message.Content == "" {
-			continue
-		}
-
-		switch message.Role {
-		case entity.MessageRoleSystem, entity.MessageRoleUser, entity.MessageRoleAssistant:
-		default:
-			continue
-		}
-
-		result = append(result, openAIChatMessage{
-			Role:    message.Role,
-			Content: message.Content,
-		})
-	}
-
-	return result
 }
 
 func streamOpenAIChatCompletion(body io.Reader, cb service.GenerateCallbacks) error {
