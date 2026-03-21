@@ -27,9 +27,16 @@ type CreateMessageInput struct {
 	PrevID           string
 }
 
-type MessageService struct {
-	conversationRepo *repository.ConversationRepository
-	messageRepo      *repository.MessageRepository
+type ListMessagesPageInput struct {
+	ConversationID string
+	BeforeSeq      *int
+	Limit          int
+}
+
+type ListMessagesPageResult struct {
+	Messages      []entity.Message
+	HasMore       bool
+	NextBeforeSeq *int
 }
 
 type UpdateGeneratedMessageInput struct {
@@ -39,6 +46,11 @@ type UpdateGeneratedMessageInput struct {
 	ReasoningContent string
 	Status           string
 	ErrorMessage     string
+}
+
+type MessageService struct {
+	conversationRepo *repository.ConversationRepository
+	messageRepo      *repository.MessageRepository
 }
 
 func NewMessageService(
@@ -92,12 +104,44 @@ func (s *MessageService) CreateMessage(ctx context.Context, userID int64, input 
 	return created, nil
 }
 
-func (s *MessageService) ListByConversationID(ctx context.Context, userID int64, conversationID string) ([]entity.Message, error) {
-	if err := s.ensureConversationOwned(ctx, userID, conversationID); err != nil {
+//func (s *MessageService) ListByConversationID(ctx context.Context, userID int64, conversationID string) ([]entity.Message, error) {
+//	if err := s.ensureConversationOwned(ctx, userID, conversationID); err != nil {
+//		return nil, err
+//	}
+//
+//	return s.messageRepo.ListByConversationID(ctx, conversationID)
+//}
+
+func (s *MessageService) ListPageByConversationID(
+	ctx context.Context,
+	userID int64,
+	input ListMessagesPageInput,
+) (*ListMessagesPageResult, error) {
+	if err := s.ensureConversationOwned(ctx, userID, input.ConversationID); err != nil {
 		return nil, err
 	}
 
-	return s.messageRepo.ListByConversationID(ctx, conversationID)
+	messages, hasMore, err := s.messageRepo.ListPageByConversationID(
+		ctx,
+		input.ConversationID,
+		input.BeforeSeq,
+		input.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var nextBeforeSeq *int
+	if hasMore && len(messages) > 0 {
+		seq := messages[0].Seq
+		nextBeforeSeq = &seq
+	}
+
+	return &ListMessagesPageResult{
+		Messages:      messages,
+		HasMore:       hasMore,
+		NextBeforeSeq: nextBeforeSeq,
+	}, nil
 }
 
 func (s *MessageService) ListByConversationIDBeforeOrEqualSeq(

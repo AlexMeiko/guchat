@@ -46,15 +46,37 @@ func (r *MessageRepository) Create(ctx context.Context, message *entity.Message)
 	return err
 }
 
-func (r *MessageRepository) ListByConversationID(ctx context.Context, conversationID string) ([]entity.Message, error) {
-	const query = `SELECT * FROM messages WHERE conversation_id = ? ORDER BY seq ASC`
-
+func (r *MessageRepository) ListPageByConversationID(
+	ctx context.Context,
+	conversationID string,
+	beforeSeq *int,
+	limit int,
+) ([]entity.Message, bool, error) {
+	queryLimit := limit + 1
 	var messages []entity.Message
-	if err := r.db.SelectContext(ctx, &messages, query, conversationID); err != nil {
-		return nil, err
+	var err error
+
+	if beforeSeq == nil {
+		const query = `SELECT * FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?`
+
+		err = r.db.SelectContext(ctx, &messages, query, conversationID, queryLimit)
+	} else {
+		const query = `SELECT * FROM messages WHERE conversation_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?`
+
+		err = r.db.SelectContext(ctx, &messages, query, conversationID, *beforeSeq, queryLimit)
 	}
 
-	return messages, nil
+	if err != nil {
+		return nil, false, err
+	}
+
+	hasMore := len(messages) > limit
+	if hasMore {
+		messages = messages[:limit]
+	}
+
+	reverseMessages(messages)
+	return messages, hasMore, nil
 }
 
 func (r *MessageRepository) ListByConversationIDBeforeOrEqualSeq(
@@ -203,4 +225,10 @@ func (r *MessageRepository) FailUnfinishedMsg(ctx context.Context, errorMessage 
 	}
 
 	return n, nil
+}
+
+func reverseMessages(messages []entity.Message) {
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
 }
