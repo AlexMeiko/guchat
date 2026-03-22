@@ -80,8 +80,8 @@ func main() {
 	}
 
 	generatorFactory := generator.NewFactory(map[string]service.Generator{
-		"openai":           generator.NewOpenAIGenerator(client),
-		"openai_responses": generator.NewOpenAIResponse(client),
+		"openai":           generator.NewOpenAIChatCompletionsGenerator(client),
+		"openai_responses": generator.NewOpenAIResponsesGenerator(client),
 		"fake":             generator.NewFakeGenerator(),
 	})
 

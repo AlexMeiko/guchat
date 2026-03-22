@@ -13,39 +13,39 @@ import (
 	"github.com/AlexMeiko/guchat/internal/service"
 )
 
-type OpenAIResponse struct {
+type OpenAIResponsesGenerator struct {
 	client *http.Client
 }
 
-type openAIResponseRequest struct {
-	Model  string              `json:"model"`
-	Input  []openAIChatMessage `json:"input"`
-	Stream bool                `json:"stream"`
+type openAIResponsesRequest struct {
+	Model  string               `json:"model"`
+	Input  []openAIInputMessage `json:"input"`
+	Stream bool                 `json:"stream"`
 }
 
-func NewOpenAIResponse(client *http.Client) *OpenAIResponse {
+func NewOpenAIResponsesGenerator(client *http.Client) *OpenAIResponsesGenerator {
 	if client == nil {
 		client = http.DefaultClient
 	}
 
-	return &OpenAIResponse{
+	return &OpenAIResponsesGenerator{
 		client: client,
 	}
 }
 
-func (g *OpenAIResponse) Generate(ctx context.Context, input service.GenerateInput, cb service.GenerateCallbacks) error {
+func (g *OpenAIResponsesGenerator) Generate(ctx context.Context, input service.GenerateInput, cb service.GenerateCallbacks) error {
 	if input.Model == nil {
-		return errors.New("model is required")
+		return errors.New("model config is required")
 	}
 
 	apiKey := strings.TrimSpace(input.Model.APIKey)
 
-	messages := buildOpenAIChatMessages(input.Messages)
+	messages := buildOpenAIInputMessages(input.Messages)
 	if len(messages) == 0 {
 		return errors.New("no prompt messages to send")
 	}
 
-	reqBody := openAIResponseRequest{
+	reqBody := openAIResponsesRequest{
 		Model:  input.Model.ModelKey,
 		Input:  messages,
 		Stream: true,
@@ -59,7 +59,7 @@ func (g *OpenAIResponse) Generate(ctx context.Context, input service.GenerateInp
 	req, err := http.NewRequestWithContext(
 		ctx,
 		"POST",
-		buildOpenAIResponseURL(input.Model.BaseURL),
+		buildOpenAIResponsesURL(input.Model.BaseURL),
 		bytes.NewBuffer(payload),
 	)
 	if err != nil {
@@ -80,15 +80,15 @@ func (g *OpenAIResponse) Generate(ctx context.Context, input service.GenerateInp
 		return decodeOpenAIError(resp)
 	}
 
-	return streamOpenAIResponse(resp.Body, cb)
+	return streamOpenAIResponses(resp.Body, cb)
 }
 
-type eventBody struct {
+type openAIResponsesEvent struct {
 	Type  string `json:"type"`
 	Delta string `json:"delta"`
 }
 
-func streamOpenAIResponse(body io.ReadCloser, cb service.GenerateCallbacks) error {
+func streamOpenAIResponses(body io.ReadCloser, cb service.GenerateCallbacks) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 
@@ -103,19 +103,19 @@ func streamOpenAIResponse(body io.ReadCloser, cb service.GenerateCallbacks) erro
 
 		rawData := strings.Join(dataLines, "\n")
 		dataLines = dataLines[:0]
-		curEvent := event
+		currentEvent := event
 		event = ""
 
-		var payload eventBody
+		var payload openAIResponsesEvent
 		if err := json.Unmarshal([]byte(rawData), &payload); err != nil {
 			return err
 		}
 
-		if curEvent == "" {
-			curEvent = payload.Type
+		if currentEvent == "" {
+			currentEvent = payload.Type
 		}
 
-		switch curEvent {
+		switch currentEvent {
 		case "response.output_text.delta":
 			cb.ContentDelta(payload.Delta)
 		case "response.reasoning_summary_text.delta":
@@ -158,7 +158,7 @@ func streamOpenAIResponse(body io.ReadCloser, cb service.GenerateCallbacks) erro
 
 }
 
-func buildOpenAIResponseURL(baseURL string) string {
+func buildOpenAIResponsesURL(baseURL string) string {
 	baseURL = strings.TrimSpace(baseURL)
 	baseURL = strings.TrimRight(baseURL, "/")
 	if strings.HasSuffix(baseURL, "/responses") {

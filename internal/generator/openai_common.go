@@ -8,13 +8,13 @@ import (
 
 var errOpenAIStreamDone = errors.New("stream done")
 
-type openAIChatMessage struct {
+type openAIInputMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-func buildOpenAIChatMessages(messages []entity.Message) []openAIChatMessage {
-	result := make([]openAIChatMessage, 0, len(messages))
+func buildOpenAIInputMessages(messages []entity.Message) []openAIInputMessage {
+	result := make([]openAIInputMessage, 0, len(messages))
 
 	for _, message := range messages {
 		if message.Content == "" {
@@ -27,7 +27,7 @@ func buildOpenAIChatMessages(messages []entity.Message) []openAIChatMessage {
 			continue
 		}
 
-		result = append(result, openAIChatMessage{
+		result = append(result, openAIInputMessage{
 			Role:    message.Role,
 			Content: message.Content,
 		})
