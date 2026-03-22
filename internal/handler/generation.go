@@ -55,6 +55,15 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 		return
 	}
 
+	contextLimit := 0
+	if req.ContextLimit != nil {
+		if *req.ContextLimit <= 0 {
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid context limit"})
+			return
+		}
+		contextLimit = *req.ContextLimit
+	}
+
 	user, ok := requireCurrentUser(c)
 	if !ok {
 		return
@@ -64,6 +73,7 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 		conversationID,
 		messageID,
 		req.ModelID,
+		contextLimit,
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrConversationNotFound) {

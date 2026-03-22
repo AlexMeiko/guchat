@@ -1,7 +1,8 @@
 package model
 
 type CreateGenerationRequest struct {
-	ModelID int64 `json:"model_id" binding:"required"`
+	ModelID      int64 `json:"model_id" binding:"required"`
+	ContextLimit *int  `json:"context_limit"`
 }
 
 type GenerationEvent struct {

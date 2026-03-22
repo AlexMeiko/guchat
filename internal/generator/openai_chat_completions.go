@@ -11,27 +11,24 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/AlexMeiko/guchat/internal/entity"
 	"github.com/AlexMeiko/guchat/internal/service"
 )
 
-type OpenAIGenerator struct {
+type OpenAIChatCompletionsGenerator struct {
 	client *http.Client
 }
 
-var errOpenAIStreamDone = errors.New("stream done")
-
-func NewOpenAIGenerator(client *http.Client) *OpenAIGenerator {
+func NewOpenAIChatCompletionsGenerator(client *http.Client) *OpenAIChatCompletionsGenerator {
 	if client == nil {
 		client = http.DefaultClient
 	}
 
-	return &OpenAIGenerator{
+	return &OpenAIChatCompletionsGenerator{
 		client: client,
 	}
 }
 
-func (g *OpenAIGenerator) Generate(ctx context.Context, input service.GenerateInput, cb service.GenerateCallbacks) error {
+func (g *OpenAIChatCompletionsGenerator) Generate(ctx context.Context, input service.GenerateInput, cb service.GenerateCallbacks) error {
 	if input.Model == nil {
 		return errors.New("model config is required")
 	}
@@ -41,7 +38,7 @@ func (g *OpenAIGenerator) Generate(ctx context.Context, input service.GenerateIn
 		return errors.New("model api key is required")
 	}
 
-	messages := buildOpenAIChatMessages(input.Messages)
+	messages := buildOpenAIInputMessages(input.Messages)
 	if len(messages) == 0 {
 		return errors.New("no prompt messages to send")
 	}
@@ -85,14 +82,9 @@ func (g *OpenAIGenerator) Generate(ctx context.Context, input service.GenerateIn
 }
 
 type openAIChatCompletionRequest struct {
-	Model    string              `json:"model"`
-	Messages []openAIChatMessage `json:"messages"`
-	Stream   bool                `json:"stream"`
-}
-
-type openAIChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Model    string               `json:"model"`
+	Messages []openAIInputMessage `json:"messages"`
+	Stream   bool                 `json:"stream"`
 }
 
 type openAIChatCompletionChunk struct {
@@ -118,29 +110,6 @@ func buildOpenAIChatCompletionsURL(baseURL string) string {
 	}
 
 	return baseURL + "/chat/completions"
-}
-
-func buildOpenAIChatMessages(messages []entity.Message) []openAIChatMessage {
-	result := make([]openAIChatMessage, 0, len(messages))
-
-	for _, message := range messages {
-		if message.Content == "" {
-			continue
-		}
-
-		switch message.Role {
-		case entity.MessageRoleSystem, entity.MessageRoleUser, entity.MessageRoleAssistant:
-		default:
-			continue
-		}
-
-		result = append(result, openAIChatMessage{
-			Role:    message.Role,
-			Content: message.Content,
-		})
-	}
-
-	return result
 }
 
 func streamOpenAIChatCompletion(body io.Reader, cb service.GenerateCallbacks) error {

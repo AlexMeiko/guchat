@@ -558,12 +558,17 @@ Authorization: Bearer <access_token>
 
 - 路径中的 `:message_id` 是“源消息 ID”。
 - 成功后会新建一条 assistant 消息，并异步开始生成。
+- `context_limit` 为可选字段，表示本次生成最多携带多少条最近的非 `system` 消息。
+- 所有 `system` 消息都会始终保留，不计入 `context_limit`。
+- 不传 `context_limit` 时，默认使用 `15`。
+- 上下文裁剪范围截至源消息本身。
 
 请求体：
 
 ```json
 {
-  "model_id": 1
+  "model_id": 1,
+  "context_limit": 15
 }
 ```
 
@@ -587,6 +592,7 @@ Authorization: Bearer <access_token>
 - `400 invalid conversation id`
 - `400 invalid message id`
 - `400 invalid request body`
+- `400 invalid context limit`
 - `404 conversation not found`
 - `404 message not found`
 - `404 model not found`
@@ -892,7 +898,7 @@ curl -X POST "http://localhost:8080/api/conversations/<conversation_id>/messages
 curl -X POST "http://localhost:8080/api/conversations/<conversation_id>/messages/<message_id>/generation" \
   -H "Authorization: Bearer <access_token>" \
   -H "Content-Type: application/json" \
-  -d '{"model_id":1}'
+  -d '{"model_id":1,"context_limit":15}'
 ```
 
 ### 8.6 订阅 SSE

@@ -15,10 +15,14 @@ var (
 	ErrGenerationTaskNotFound = errors.New("generation task not found")
 )
 
+// TODO: 默认上下文限制，后面放到config里
+const defaultGenerationContextLimit = 25
+
 type CreateGenerationInput struct {
 	ConversationID  string
 	SourceMessageID string
 	ModelID         int64
+	ContextLimit    int
 }
 
 type generationRetryItem struct {
@@ -99,6 +103,10 @@ func (s *GenerationService) Create(
 	processCtx, cancel := context.WithCancel(context.Background())
 	s.runtimeManager.Create(assistantMsg.ID, cancel)
 
+	if input.ContextLimit <= 0 {
+		input.ContextLimit = defaultGenerationContextLimit
+	}
+
 	go func() {
 		_ = s.Process(
 			processCtx,
@@ -107,6 +115,7 @@ func (s *GenerationService) Create(
 			assistantMsg.ID,
 			sourceMessage.Seq,
 			input.ModelID,
+			input.ContextLimit,
 		)
 	}()
 
@@ -120,6 +129,7 @@ func (s *GenerationService) Process(
 	assistantMessageID string,
 	sourceMessageSeq int,
 	modelID int64,
+	userContextLimit int,
 ) error {
 	task, ok := s.runtimeManager.Get(assistantMessageID)
 	if !ok {
@@ -159,11 +169,12 @@ func (s *GenerationService) Process(
 		return fail(ErrModelDisabled)
 	}
 
-	messages, err := s.messageService.ListByConversationIDBeforeOrEqualSeq(
+	messages, err := s.messageService.ListGenerationContextByConversationID(
 		ctx,
 		userID,
 		conversationID,
 		sourceMessageSeq,
+		userContextLimit,
 	)
 	if err != nil {
 		return fail(err)

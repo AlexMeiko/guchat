@@ -157,6 +157,20 @@ func (s *MessageService) ListByConversationIDBeforeOrEqualSeq(
 	return s.messageRepo.ListByConversationIDBeforeOrEqualSeq(ctx, conversationID, seq)
 }
 
+func (s *MessageService) ListGenerationContextByConversationID(
+	ctx context.Context,
+	userID int64,
+	conversationID string,
+	seq int,
+	nonSystemLimit int,
+) ([]entity.Message, error) {
+	if err := s.ensureConversationOwned(ctx, userID, conversationID); err != nil {
+		return nil, err
+	}
+
+	return s.messageRepo.ListGenerationContextByConversationID(ctx, conversationID, seq, nonSystemLimit)
+}
+
 func (s *MessageService) GetByIDAndConversationID(ctx context.Context, userID int64, conversationID, messageID string) (*entity.Message, error) {
 	if err := s.ensureConversationOwned(ctx, userID, conversationID); err != nil {
 		return nil, err

@@ -45,7 +45,7 @@ func (h *MessageHandler) ListByConversationID(c *gin.Context) {
 		return
 	}
 
-	limit := 50
+	limit := 20
 	if raw := c.Query("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 1 || parsed > 100 {

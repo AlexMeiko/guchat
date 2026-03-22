@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sort"
 
 	"github.com/AlexMeiko/guchat/internal/entity"
 	"github.com/jmoiron/sqlx"
@@ -90,6 +91,35 @@ func (r *MessageRepository) ListByConversationIDBeforeOrEqualSeq(
 	if err := r.db.SelectContext(ctx, &messages, query, conversationID, seq); err != nil {
 		return nil, err
 	}
+
+	return messages, nil
+}
+
+func (r *MessageRepository) ListGenerationContextByConversationID(
+	ctx context.Context,
+	conversationID string,
+	seq int,
+	nonSystemContextLimit int,
+) ([]entity.Message, error) {
+	const systemQuery = `SELECT * FROM messages WHERE conversation_id = ? AND seq <= ? AND role = ?`
+
+	var systemMessages []entity.Message
+	if err := r.db.SelectContext(ctx, &systemMessages, systemQuery, conversationID, seq, entity.MessageRoleSystem); err != nil {
+		return nil, err
+	}
+
+	var messages []entity.Message
+	if nonSystemContextLimit > 0 {
+		const userQuery = `SELECT * FROM messages WHERE conversation_id = ? AND seq <= ? AND role <> ? ORDER BY seq DESC LIMIT ?`
+		if err := r.db.SelectContext(ctx, &messages, userQuery, conversationID, seq, entity.MessageRoleSystem, nonSystemContextLimit); err != nil {
+			return nil, err
+		}
+	}
+
+	messages = append(messages, systemMessages...)
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].Seq < messages[j].Seq
+	})
 
 	return messages, nil
 }
