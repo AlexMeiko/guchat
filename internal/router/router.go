@@ -53,11 +53,17 @@ func New(
 		models := api.Group("/models", middleware.Auth(jwtService))
 		{
 			models.GET("", modelHandler.ListEnabled)
-			models.POST("", modelHandler.Create)
-			models.GET("/:id", modelHandler.Get)
-			models.PATCH("/:id", modelHandler.Update)
-			models.DELETE("/:id", modelHandler.Delete)
 		}
+
+		adminModels := api.Group("/admin/models", middleware.Auth(jwtService))
+		{
+			adminModels.GET("", modelHandler.ListAll)
+			adminModels.POST("", modelHandler.Create)
+			adminModels.GET("/:id", modelHandler.Get)
+			adminModels.PATCH("/:id", modelHandler.Update)
+			adminModels.DELETE("/:id", modelHandler.Delete)
+		}
+
 	}
 
 	return r

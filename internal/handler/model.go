@@ -39,6 +39,34 @@ func (h *ModelHandler) ListEnabled(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func (h *ModelHandler) ListAll(c *gin.Context) {
+	user, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	if user.Role != "admin" {
+		c.JSON(http.StatusForbidden, model.ErrorResponse{
+			Error: "forbidden",
+		})
+		return
+	}
+
+	models, err := h.modelService.ListAll(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: "internal server error",
+		})
+		return
+	}
+
+	response := make([]model.ModelDetailResponse, len(models))
+	for i := range models {
+		response[i] = newModelDetailResponse(&models[i])
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 func (h *ModelHandler) Create(c *gin.Context) {
 	var req model.CreateModelRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

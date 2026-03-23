@@ -45,6 +45,10 @@ func (s *ModelService) ListEnabled(ctx context.Context) ([]entity.ModelConfig, e
 	return s.modelRepo.ListEnabled(ctx)
 }
 
+func (s *ModelService) ListAll(ctx context.Context) ([]entity.ModelConfig, error) {
+	return s.modelRepo.ListAll(ctx)
+}
+
 func (s *ModelService) Create(ctx context.Context, input CreateModelInput) (*entity.ModelConfig, error) {
 	model := &entity.ModelConfig{
 		Name:      input.Name,

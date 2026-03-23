@@ -59,6 +59,16 @@ func (r *ModelRepository) ListEnabled(ctx context.Context) ([]entity.ModelConfig
 	return models, nil
 }
 
+func (r *ModelRepository) ListAll(ctx context.Context) ([]entity.ModelConfig, error) {
+	const query = `SELECT * FROM models ORDER BY id ASC`
+	var models []entity.ModelConfig
+	if err := r.db.SelectContext(ctx, &models, query); err != nil {
+		return nil, err
+	}
+
+	return models, nil
+}
+
 func (r *ModelRepository) GetByID(ctx context.Context, id int64) (*entity.ModelConfig, error) {
 	const query = `SELECT * FROM models WHERE id = ? LIMIT 1`
 
