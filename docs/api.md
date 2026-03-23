@@ -71,7 +71,7 @@ Authorization: Bearer <access_token>
 模型管理接口权限：
 
 - `GET /api/models`：已登录即可访问
-- `POST /api/models`、`GET /api/models/:id`、`PATCH /api/models/:id`、`DELETE /api/models/:id`：需要 `admin`
+- `GET /api/admin/models`、`POST /api/admin/models`、`GET /api/admin/models/:id`、`PATCH /api/admin/models/:id`、`DELETE /api/admin/models/:id`：需要 `admin`
 
 ---
 
@@ -146,10 +146,11 @@ Authorization: Bearer <access_token>
 | 生成 | POST | `/api/conversations/:conversation_id/messages/:message_id/generation` | Yes | user/admin |
 | 生成 | GET | `/api/conversations/:conversation_id/messages/:message_id/events` | Yes | user/admin |
 | 模型 | GET | `/api/models` | Yes | user/admin |
-| 模型 | POST | `/api/models` | Yes | admin |
-| 模型 | GET | `/api/models/:id` | Yes | admin |
-| 模型 | PATCH | `/api/models/:id` | Yes | admin |
-| 模型 | DELETE | `/api/models/:id` | Yes | admin |
+| 模型管理 | GET | `/api/admin/models` | Yes | admin |
+| 模型管理 | POST | `/api/admin/models` | Yes | admin |
+| 模型管理 | GET | `/api/admin/models/:id` | Yes | admin |
+| 模型管理 | PATCH | `/api/admin/models/:id` | Yes | admin |
+| 模型管理 | DELETE | `/api/admin/models/:id` | Yes | admin |
 
 ---
 
@@ -671,7 +672,53 @@ Authorization: Bearer <access_token>
 
 - `500 internal server error`
 
-#### `POST /api/models`（admin）
+#### `GET /api/admin/models`（admin）
+
+说明：
+
+- 返回全部模型配置，包括已启用和未启用模型
+- 当前实现直接返回模型详情数组
+
+成功响应：`200 OK`
+
+```json
+[
+  {
+    "id": 1,
+    "name": "DeepSeek R1",
+    "provider": "openai",
+    "model_key": "deepseek-r1-0528",
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "sk-xxx",
+    "extra_body": {
+      "temperature": 0.3,
+      "top_p": 0.95
+    },
+    "is_enabled": true,
+    "created_at": "2026-03-20T18:00:00+08:00",
+    "updated_at": "2026-03-20T18:00:00+08:00"
+  },
+  {
+    "id": 2,
+    "name": "Disabled Model",
+    "provider": "openai_responses",
+    "model_key": "gpt-4.1-mini",
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "sk-yyy",
+    "extra_body": {},
+    "is_enabled": false,
+    "created_at": "2026-03-20T18:10:00+08:00",
+    "updated_at": "2026-03-20T18:10:00+08:00"
+  }
+]
+```
+
+常见失败：
+
+- `403 forbidden`
+- `500 internal server error`
+
+#### `POST /api/admin/models`（admin）
 
 请求体：
 
@@ -726,7 +773,7 @@ Authorization: Bearer <access_token>
 - `403 forbidden`
 - `500 internal server error`
 
-#### `GET /api/models/:id`（admin）
+#### `GET /api/admin/models/:id`（admin）
 
 成功响应：`200 OK`
 
@@ -755,7 +802,7 @@ Authorization: Bearer <access_token>
 - `404 model not found`
 - `500 internal server error`
 
-#### `PATCH /api/models/:id`（admin）
+#### `PATCH /api/admin/models/:id`（admin）
 
 请求体示例：
 
@@ -783,7 +830,7 @@ Authorization: Bearer <access_token>
 
 成功响应：`200 OK`
 
-响应体同 `GET /api/models/:id`。
+响应体同 `GET /api/admin/models/:id`。
 
 常见失败：
 
@@ -794,7 +841,7 @@ Authorization: Bearer <access_token>
 - `404 model not found`
 - `500 internal server error`
 
-#### `DELETE /api/models/:id`（admin）
+#### `DELETE /api/admin/models/:id`（admin）
 
 成功响应：`204 No Content`
 
@@ -978,7 +1025,7 @@ curl -X POST "http://localhost:8080/api/conversations/<conversation_id>/messages
 ### 8.6 创建模型
 
 ```bash
-curl -X POST "http://localhost:8080/api/models" \
+curl -X POST "http://localhost:8080/api/admin/models" \
   -H "Authorization: Bearer <access_token>" \
   -H "Content-Type: application/json" \
   -d '{
