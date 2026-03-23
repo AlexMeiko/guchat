@@ -23,8 +23,9 @@ func (r *ModelRepository) Create(ctx context.Context, model *entity.ModelConfig)
 			model_key,
 			base_url,
 			api_key,
+		    extra_body,
 			is_enabled
-		) VALUES (?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
 	`
 
 	result, err := r.db.ExecContext(
@@ -35,6 +36,7 @@ func (r *ModelRepository) Create(ctx context.Context, model *entity.ModelConfig)
 		model.ModelKey,
 		model.BaseURL,
 		model.APIKey,
+		model.ExtraBody,
 		model.IsEnabled,
 	)
 
@@ -77,6 +79,7 @@ func (r *ModelRepository) UpdateByID(ctx context.Context, model *entity.ModelCon
 			model_key = ?,
 			base_url = ?,
 			api_key = ?,
+			extra_body = ?,
 			is_enabled = ?
 		WHERE id = ?
 	`
@@ -89,6 +92,7 @@ func (r *ModelRepository) UpdateByID(ctx context.Context, model *entity.ModelCon
 		model.ModelKey,
 		model.BaseURL,
 		model.APIKey,
+		model.ExtraBody,
 		model.IsEnabled,
 		model.ID,
 	)

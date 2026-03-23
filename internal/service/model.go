@@ -17,6 +17,7 @@ type CreateModelInput struct {
 	ModelKey  string
 	BaseURL   string
 	APIKey    string
+	ExtraBody string
 	IsEnabled bool
 }
 
@@ -26,6 +27,7 @@ type UpdateModelInput struct {
 	ModelKey  *string
 	BaseURL   *string
 	APIKey    *string
+	ExtraBody *string
 	IsEnabled *bool
 }
 
@@ -50,6 +52,7 @@ func (s *ModelService) Create(ctx context.Context, input CreateModelInput) (*ent
 		ModelKey:  input.ModelKey,
 		BaseURL:   input.BaseURL,
 		APIKey:    input.APIKey,
+		ExtraBody: input.ExtraBody,
 		IsEnabled: input.IsEnabled,
 	}
 
@@ -98,6 +101,9 @@ func (s *ModelService) UpdateByID(ctx context.Context, id int64, input UpdateMod
 	}
 	if input.BaseURL != nil {
 		model.BaseURL = *input.BaseURL
+	}
+	if input.ExtraBody != nil {
+		model.ExtraBody = *input.ExtraBody
 	}
 	if input.APIKey != nil {
 		model.APIKey = *input.APIKey

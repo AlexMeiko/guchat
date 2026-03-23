@@ -39,6 +39,9 @@ func (g *OpenAIResponsesGenerator) Generate(ctx context.Context, input service.G
 	}
 
 	apiKey := strings.TrimSpace(input.Model.APIKey)
+	if apiKey == "" {
+		return errors.New("model api key is required")
+	}
 
 	messages := buildOpenAIInputMessages(input.Messages)
 	if len(messages) == 0 {
@@ -51,7 +54,13 @@ func (g *OpenAIResponsesGenerator) Generate(ctx context.Context, input service.G
 		Stream: true,
 	}
 
-	payload, err := json.Marshal(reqBody)
+	payload, err := marshalOpenAIRequestBody(
+		reqBody,
+		input.Model.ExtraBody,
+		"model",
+		"input",
+		"stream",
+	)
 	if err != nil {
 		return err
 	}
