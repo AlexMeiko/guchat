@@ -1,6 +1,6 @@
 # guchat-go API 文档
 
-> 基于当前后端实现与已确认接口设计整理。若实现与文档暂时不一致，以文档中明确说明的目标行为为后续调整方向。
+> 本文档以当前后端实现为准，面向前后端联调与后续接口维护。
 
 ---
 
@@ -25,14 +25,22 @@
 | 健康检查 | `GET /health` |
 | 普通请求/响应 | `application/json` |
 | 流式输出 | `text/event-stream` |
-| 当前用户角色 | `user`、`admin` |
-| 当前消息角色 | `system`、`user`、`assistant` |
+| 用户角色 | `user`、`admin` |
+| 消息角色 | `system`、`user`、`assistant` |
+| 消息状态 | `pending`、`streaming`、`done`、`failed` |
+| 模型 provider | `openai`、`openai_responses`、`fake` |
 
 ---
 
 ## 2. 鉴权规则
 
-除 `GET /health`、`POST /api/auth/register`、`POST /api/auth/login`、`POST /api/auth/refresh`、`POST /api/auth/logout` 之外，其余接口都需要登录。
+除以下接口外，其余接口都需要登录：
+
+- `GET /health`
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/refresh`
+- `POST /api/auth/logout`
 
 鉴权头格式：
 
@@ -101,7 +109,17 @@ Authorization: Bearer <access_token>
 ### 3.4 关于请求体
 
 - 只要 handler 使用了 `ShouldBindJSON`，请求体就必须是合法 JSON。
-- 即使某些字段是可选的，也不能直接发送空请求体；如果没有可填内容，请发送 `{}`。
+- 即使所有字段都是可选的，也不能发送空请求体；没有要传的字段时请发送 `{}`。
+
+### 3.5 关于 `extra_body`
+
+- `extra_body` 仅出现在模型配置接口中。
+- 它必须是一个 JSON object，不允许传数组、字符串、数字或 `null`。
+- 省略或传 `{}` 都表示“不追加额外参数”。
+- 创建和更新模型时会将其压缩规范化后存库。
+- 当前生成器会将 `extra_body` 合并进上游请求体，但不会允许覆盖保留字段：
+  - Chat Completions：`model`、`messages`、`stream`
+  - Responses API：`model`、`input`、`stream`
 
 ---
 
@@ -387,7 +405,7 @@ Authorization: Bearer <access_token>
 
 查询参数：
 
-- `limit`：可选，单页返回条数，默认 `50`，最大 `100`
+- `limit`：可选，单页返回条数，默认 `20`，最大 `100`
 - `before_seq`：可选，返回 `seq` 小于该值的更早消息；不传时返回最新一页
 
 说明：
@@ -446,6 +464,11 @@ Authorization: Bearer <access_token>
   "prev_id": "可选，上一条消息 ID"
 }
 ```
+
+说明：
+
+- 该接口当前固定创建一条 `role=user` 的消息
+- `prev_id` 为空时追加到当前会话末尾，也就是最新位置；非空时插入到指定消息之后
 
 成功响应：`201 Created`
 
@@ -507,6 +530,11 @@ Authorization: Bearer <access_token>
 }
 ```
 
+说明：
+
+- 当前实现不区分角色，允许更新任意消息的 `content`
+- 返回完整更新后的消息对象
+
 成功响应：`200 OK`
 
 ```json
@@ -537,8 +565,8 @@ Authorization: Bearer <access_token>
 
 实现说明：
 
-- 如果该消息当前仍存在内存中的生成任务，服务端会同步取消该任务。
-- 删除后以数据库状态为准；后续再查询该消息应返回 `404`。
+- 如果该消息当前仍存在内存中的生成任务，服务端会同步取消该任务
+- 删除后以数据库状态为准；后续再查询该消息应返回 `404`
 
 常见失败：
 
@@ -556,19 +584,19 @@ Authorization: Bearer <access_token>
 
 说明：
 
-- 路径中的 `:message_id` 是“源消息 ID”。
-- 成功后会新建一条 assistant 消息，并异步开始生成。
-- `context_limit` 为可选字段，表示本次生成最多携带多少条最近的非 `system` 消息。
-- 所有 `system` 消息都会始终保留，不计入 `context_limit`。
-- 不传 `context_limit` 时，默认使用 `15`。
-- 上下文裁剪范围截至源消息本身。
+- 路径中的 `:message_id` 是源消息 ID
+- 成功后会新建一条 assistant 消息，并异步开始生成
+- `context_limit` 为可选字段，表示本次生成最多携带多少条最近的非 `system` 消息
+- 所有 `system` 消息都会始终保留，不计入 `context_limit`
+- 不传 `context_limit` 时，当前实现默认使用 `25`
+- 上下文裁剪范围截至源消息本身
 
 请求体：
 
 ```json
 {
   "model_id": 1,
-  "context_limit": 15
+  "context_limit": 25
 }
 ```
 
@@ -604,8 +632,9 @@ Authorization: Bearer <access_token>
 
 说明：
 
-- 用于订阅指定 assistant 消息的流式事件。
-- 详见 [6. SSE 事件格式](#6-sse-事件格式)。
+- 用于订阅指定 assistant 消息的流式事件
+- 如果对应 runtime task 不存在，会立即返回一条 `message.snapshot` 后结束连接
+- 如果消息在建立连接时已经是 `done` 或 `failed`，也只会返回一条 `message.snapshot`
 
 常见失败：
 
@@ -624,8 +653,8 @@ Authorization: Bearer <access_token>
 
 说明：
 
-- 仅返回已启用模型。
-- 返回简版信息，不包含 `provider`、`base_url`、`api_key`。
+- 仅返回已启用模型
+- 返回简版信息，不包含 `provider`、`base_url`、`api_key`、`extra_body`
 
 成功响应：`200 OK`
 
@@ -633,7 +662,7 @@ Authorization: Bearer <access_token>
 [
   {
     "id": 1,
-    "name": "deepseek-r1-0528"
+    "name": "DeepSeek R1"
   }
 ]
 ```
@@ -653,9 +682,22 @@ Authorization: Bearer <access_token>
   "model_key": "deepseek-r1-0528",
   "base_url": "https://api.openai.com/v1",
   "api_key": "sk-xxx",
+  "extra_body": {
+    "temperature": 0.3,
+    "top_p": 0.95
+  },
   "is_enabled": true
 }
 ```
+
+说明：
+
+- `extra_body` 可省略；省略时等价于空对象
+- `extra_body` 必须是 JSON object，否则返回 `400 invalid extra_body`
+- 当前内置可用 provider：
+  - `openai`
+  - `openai_responses`
+  - `fake`
 
 成功响应：`201 Created`
 
@@ -667,6 +709,10 @@ Authorization: Bearer <access_token>
   "model_key": "deepseek-r1-0528",
   "base_url": "https://api.openai.com/v1",
   "api_key": "sk-xxx",
+  "extra_body": {
+    "temperature": 0.3,
+    "top_p": 0.95
+  },
   "is_enabled": true,
   "created_at": "2026-03-20T18:00:00+08:00",
   "updated_at": "2026-03-20T18:00:00+08:00"
@@ -676,6 +722,7 @@ Authorization: Bearer <access_token>
 常见失败：
 
 - `400 invalid request body`
+- `400 invalid extra_body`
 - `403 forbidden`
 - `500 internal server error`
 
@@ -683,7 +730,23 @@ Authorization: Bearer <access_token>
 
 成功响应：`200 OK`
 
-响应体同 `ModelDetailResponse`。
+```json
+{
+  "id": 1,
+  "name": "DeepSeek R1",
+  "provider": "openai",
+  "model_key": "deepseek-r1-0528",
+  "base_url": "https://api.openai.com/v1",
+  "api_key": "sk-xxx",
+  "extra_body": {
+    "temperature": 0.3,
+    "top_p": 0.95
+  },
+  "is_enabled": true,
+  "created_at": "2026-03-20T18:00:00+08:00",
+  "updated_at": "2026-03-20T18:00:00+08:00"
+}
+```
 
 常见失败：
 
@@ -699,23 +762,34 @@ Authorization: Bearer <access_token>
 ```json
 {
   "name": "DeepSeek R1 New",
+  "extra_body": {
+    "temperature": 0.8,
+    "max_output_tokens": 2048
+  },
   "is_enabled": false
 }
 ```
 
 说明：
 
-- 所有字段都是可选的。
-- 仅传需要修改的字段即可。
+- 所有字段都是可选的，仅传需要修改的字段即可
+- 如果要清空额外参数，建议传：
+
+```json
+{
+  "extra_body": {}
+}
+```
 
 成功响应：`200 OK`
 
-响应体同 `ModelDetailResponse`。
+响应体同 `GET /api/models/:id`。
 
 常见失败：
 
 - `400 invalid model id`
 - `400 invalid request body`
+- `400 invalid extra_body`
 - `403 forbidden`
 - `404 model not found`
 - `500 internal server error`
@@ -778,9 +852,9 @@ data: <json>
 
 说明：
 
-- 建立连接后总会先收到一条 `message.snapshot`。
-- 如果对应 runtime task 不存在，接口只会返回这一条 `snapshot`，然后结束连接。
-- 如果消息在连接建立时已经是 `done` 或 `failed`，也只会返回这一条 `snapshot`，然后结束连接。
+- 建立连接后总会先收到一条 `message.snapshot`
+- 如果对应 runtime task 不存在，接口只会返回这一条 `snapshot`，然后结束连接
+- 如果消息在连接建立时已经是 `done` 或 `failed`，也只会返回这一条 `snapshot`，然后结束连接
 
 ### 6.2 `message.delta`
 
@@ -795,7 +869,7 @@ data: <json>
 
 说明：
 
-- 表示 `content` 的增量。
+- 表示 `content` 的增量
 
 ### 6.3 `message.reasoning_delta`
 
@@ -810,8 +884,8 @@ data: <json>
 
 说明：
 
-- 虽然事件名是 `message.reasoning_delta`，但字段名仍然是 `delta`。
-- 表示 `reasoning_content` 的增量。
+- 虽然事件名是 `message.reasoning_delta`，字段名仍然是 `delta`
+- 表示 `reasoning_content` 的增量
 
 ### 6.4 `message.completed`
 
@@ -844,9 +918,9 @@ data: <json>
 
 ## 7. 已知边界行为
 
-- 删除生成中的消息后，数据库记录会被删除，后续 `GET /messages/:id` 应返回 `404`。
-- 删除后，如果已有 SSE 连接仍在处理极小的并发窗口，当前实现下它仍可能观察到 terminal 事件；业务状态应以数据库查询结果为准。
-- 在极小的时序窗口里，`message.completed` 可能略早于数据库最终 `done` 状态可见。
+- 删除生成中的消息后，数据库记录会被删除，后续 `GET /messages/:id` 应返回 `404`
+- 删除后，如果已有 SSE 连接仍处于极小的并发窗口，当前实现下它仍可能观察到 terminal 事件；业务状态应以数据库查询结果为准
+- 在极小的时序窗口里，`message.completed` 可能略早于数据库最终 `done` 状态可见
 
 ---
 
@@ -869,17 +943,17 @@ curl http://localhost:8080/api/conversations \
 
 ### 8.3 分页获取消息
 
-获取最新 50 条消息：
+获取最新 20 条消息：
 
 ```bash
-curl "http://localhost:8080/api/conversations/<conversation_id>/messages?limit=50" \
+curl "http://localhost:8080/api/conversations/<conversation_id>/messages?limit=20" \
   -H "Authorization: Bearer <access_token>"
 ```
 
 继续向前加载更早消息：
 
 ```bash
-curl "http://localhost:8080/api/conversations/<conversation_id>/messages?before_seq=4096&limit=50" \
+curl "http://localhost:8080/api/conversations/<conversation_id>/messages?before_seq=4096&limit=20" \
   -H "Authorization: Bearer <access_token>"
 ```
 
@@ -898,10 +972,27 @@ curl -X POST "http://localhost:8080/api/conversations/<conversation_id>/messages
 curl -X POST "http://localhost:8080/api/conversations/<conversation_id>/messages/<message_id>/generation" \
   -H "Authorization: Bearer <access_token>" \
   -H "Content-Type: application/json" \
-  -d '{"model_id":1,"context_limit":15}'
+  -d '{"model_id":1,"context_limit":25}'
 ```
 
-### 8.6 订阅 SSE
+### 8.6 创建模型
+
+```bash
+curl -X POST "http://localhost:8080/api/models" \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name":"DeepSeek R1",
+    "provider":"openai",
+    "model_key":"deepseek-r1-0528",
+    "base_url":"https://api.openai.com/v1",
+    "api_key":"sk-xxx",
+    "extra_body":{"temperature":0.3},
+    "is_enabled":true
+  }'
+```
+
+### 8.7 订阅 SSE
 
 ```bash
 curl -N "http://localhost:8080/api/conversations/<conversation_id>/messages/<assistant_message_id>/events" \
