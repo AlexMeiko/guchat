@@ -49,7 +49,13 @@ func (g *OpenAIChatCompletionsGenerator) Generate(ctx context.Context, input ser
 		Stream:   true,
 	}
 
-	payload, err := json.Marshal(reqBody)
+	payload, err := marshalOpenAIRequestBody(
+		reqBody,
+		input.Model.ExtraBody,
+		"model",
+		"messages",
+		"stream",
+	)
 	if err != nil {
 		return err
 	}

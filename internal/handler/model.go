@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -38,6 +39,34 @@ func (h *ModelHandler) ListEnabled(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func (h *ModelHandler) ListAll(c *gin.Context) {
+	user, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	if user.Role != "admin" {
+		c.JSON(http.StatusForbidden, model.ErrorResponse{
+			Error: "forbidden",
+		})
+		return
+	}
+
+	models, err := h.modelService.ListAll(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: "internal server error",
+		})
+		return
+	}
+
+	response := make([]model.ModelDetailResponse, len(models))
+	for i := range models {
+		response[i] = newModelDetailResponse(&models[i])
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 func (h *ModelHandler) Create(c *gin.Context) {
 	var req model.CreateModelRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -58,12 +87,21 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		return
 	}
 
+	extraBody, err := normalizeExtraBody(req.ExtraBody)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+			Error: "invalid extra_body",
+		})
+		return
+	}
+
 	modelConfig, err := h.modelService.Create(c.Request.Context(), service.CreateModelInput{
 		Name:      req.Name,
 		Provider:  req.Provider,
 		ModelKey:  req.ModelKey,
 		BaseURL:   req.BaseURL,
 		APIKey:    req.APIKey,
+		ExtraBody: extraBody,
 		IsEnabled: req.IsEnabled,
 	})
 	if err != nil {
@@ -125,6 +163,18 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		return
 	}
 
+	var extraBody *string
+	if req.ExtraBody != nil {
+		normalizedExtraBody, err := normalizeExtraBody(*req.ExtraBody)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{
+				Error: "invalid extra_body",
+			})
+			return
+		}
+		extraBody = &normalizedExtraBody
+	}
+
 	user, ok := requireCurrentUser(c)
 	if !ok {
 		return
@@ -142,6 +192,7 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		ModelKey:  req.ModelKey,
 		BaseURL:   req.BaseURL,
 		APIKey:    req.APIKey,
+		ExtraBody: extraBody,
 		IsEnabled: req.IsEnabled,
 	})
 
@@ -205,6 +256,7 @@ func newModelDetailResponse(modelConfig *entity.ModelConfig) model.ModelDetailRe
 		ModelKey:  modelConfig.ModelKey,
 		BaseURL:   modelConfig.BaseURL,
 		APIKey:    modelConfig.APIKey,
+		ExtraBody: parseExtraBody(modelConfig.ExtraBody),
 		IsEnabled: modelConfig.IsEnabled,
 		CreatedAt: modelConfig.CreatedAt,
 		UpdatedAt: modelConfig.UpdatedAt,
@@ -228,4 +280,36 @@ func parseModelID(c *gin.Context) (int64, bool) {
 	}
 
 	return id, true
+}
+
+func normalizeExtraBody(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", err
+	}
+
+	object, ok := value.(map[string]any)
+	if !ok {
+		return "", errors.New("extra_body must be a json object")
+	}
+
+	normalized, err := json.Marshal(object)
+	if err != nil {
+		return "", err
+	}
+
+	return string(normalized), nil
+}
+
+func parseExtraBody(raw string) json.RawMessage {
+	normalized, err := normalizeExtraBody(json.RawMessage(raw))
+	if err != nil || normalized == "" {
+		return json.RawMessage(`{}`)
+	}
+
+	return json.RawMessage(normalized)
 }

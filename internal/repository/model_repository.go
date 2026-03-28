@@ -23,8 +23,9 @@ func (r *ModelRepository) Create(ctx context.Context, model *entity.ModelConfig)
 			model_key,
 			base_url,
 			api_key,
+		    extra_body,
 			is_enabled
-		) VALUES (?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
 	`
 
 	result, err := r.db.ExecContext(
@@ -35,6 +36,7 @@ func (r *ModelRepository) Create(ctx context.Context, model *entity.ModelConfig)
 		model.ModelKey,
 		model.BaseURL,
 		model.APIKey,
+		model.ExtraBody,
 		model.IsEnabled,
 	)
 
@@ -49,6 +51,16 @@ func (r *ModelRepository) Create(ctx context.Context, model *entity.ModelConfig)
 func (r *ModelRepository) ListEnabled(ctx context.Context) ([]entity.ModelConfig, error) {
 	const query = `SELECT * FROM models WHERE is_enabled = TRUE ORDER BY id ASC`
 
+	var models []entity.ModelConfig
+	if err := r.db.SelectContext(ctx, &models, query); err != nil {
+		return nil, err
+	}
+
+	return models, nil
+}
+
+func (r *ModelRepository) ListAll(ctx context.Context) ([]entity.ModelConfig, error) {
+	const query = `SELECT * FROM models ORDER BY id ASC`
 	var models []entity.ModelConfig
 	if err := r.db.SelectContext(ctx, &models, query); err != nil {
 		return nil, err
@@ -77,6 +89,7 @@ func (r *ModelRepository) UpdateByID(ctx context.Context, model *entity.ModelCon
 			model_key = ?,
 			base_url = ?,
 			api_key = ?,
+			extra_body = ?,
 			is_enabled = ?
 		WHERE id = ?
 	`
@@ -89,6 +102,7 @@ func (r *ModelRepository) UpdateByID(ctx context.Context, model *entity.ModelCon
 		model.ModelKey,
 		model.BaseURL,
 		model.APIKey,
+		model.ExtraBody,
 		model.IsEnabled,
 		model.ID,
 	)
