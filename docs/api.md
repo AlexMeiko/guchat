@@ -114,9 +114,9 @@ Authorization: Bearer <access_token>
 ### 3.5 关于 `extra_body`
 
 - `extra_body` 仅出现在模型配置接口中。
-- 它必须是一个 JSON object，不允许传数组、字符串、数字或 `null`。
-- 省略或传 `{}` 都表示“不追加额外参数”。
-- 创建和更新模型时会将其压缩规范化后存库。
+- 创建模型时，它必须是一个 JSON object，不允许传数组、字符串、数字或 `null`，省略或传 `{}` 都表示“不追加额外参数”。
+- 更新模型时，`extra_body` 为可选字段；不传或传 `null` 都表示“不修改该字段”，传 JSON object 表示更新为对应配置，传 `{}` 表示将其更新为空对象配置。
+- 创建模型时，以及更新模型时显式传入 `extra_body` 为 JSON object 时，会将其压缩规范化后存库。
 - 当前生成器会将 `extra_body` 合并进上游请求体，但不会允许覆盖保留字段：
   - Chat Completions：`model`、`messages`、`stream`
   - Responses API：`model`、`input`、`stream`
@@ -820,6 +820,7 @@ Authorization: Bearer <access_token>
 说明：
 
 - 所有字段都是可选的，仅传需要修改的字段即可
+- `extra_body` 为可选字段；不传或传 `null` 都表示不修改该字段
 - 如果要清空额外参数，建议传：
 
 ```json
