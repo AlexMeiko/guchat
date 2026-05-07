@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/AlexMeiko/guchat/internal/entity"
+	"github.com/AlexMeiko/guchat/internal/service"
 )
 
 var errOpenAIStreamDone = errors.New("stream done")
@@ -16,7 +17,7 @@ type openAIInputMessage struct {
 	Content string `json:"content"`
 }
 
-func buildOpenAIInputMessages(messages []entity.Message) []openAIInputMessage {
+func buildOpenAIInputMessages(messages []service.GenerateMessage) []openAIInputMessage {
 	result := make([]openAIInputMessage, 0, len(messages))
 
 	for _, message := range messages {

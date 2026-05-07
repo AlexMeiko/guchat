@@ -31,6 +31,11 @@ type ToolResult struct {
 	Result     json.RawMessage `json:"result"`
 }
 
+type ToolExchange struct {
+	Call   ToolCall   `json:"call"`
+	Result ToolResult `json:"result"`
+}
+
 type ToolProvider interface {
 	Name() string
 	ListTools(ctx context.Context, user UserContext) ([]ToolDefinition, error)

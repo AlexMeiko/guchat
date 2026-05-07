@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strconv"
+	"fmt"
 	"sync"
 	"time"
 
@@ -58,6 +58,10 @@ type GenerationService struct {
 	retryItems map[string]*generationRetryItem
 }
 
+func newGeneratedToolCallID(assistantMessageID string, round int, seq int) string {
+	return fmt.Sprintf("call_%s_%d_%d", assistantMessageID, round, seq)
+}
+
 func NewGenerationService(
 	messageService *MessageService,
 	modelService *ModelService,
@@ -79,6 +83,43 @@ func NewGenerationService(
 		retryMax:            retryMax,
 		retryItems:          make(map[string]*generationRetryItem),
 	}
+}
+
+func newGenerateMessages(messages []entity.Message) []GenerateMessage {
+	result := make([]GenerateMessage, 0, len(messages))
+	for _, message := range messages {
+		result = append(result, GenerateMessage{
+			ID:      message.ID,
+			Role:    message.Role,
+			Content: message.Content,
+		})
+	}
+	return result
+}
+
+func newToolExchangesFromRecords(records []entity.ToolCall) []ToolExchange {
+	result := make([]ToolExchange, 0, len(records))
+
+	for _, record := range records {
+		if record.Status != entity.ToolCallStatusDone && record.Status != entity.ToolCallStatusFailed {
+			continue
+		}
+
+		result = append(result, ToolExchange{
+			Call: ToolCall{
+				ID:        record.ProviderCallID,
+				Name:      record.ToolName,
+				Arguments: json.RawMessage(record.ArgumentsJSON),
+			},
+			Result: ToolResult{
+				ToolCallID: record.ProviderCallID,
+				Name:       record.ToolName,
+				Result:     json.RawMessage(record.ResultJSON),
+			},
+		})
+	}
+
+	return result
 }
 
 func (s *GenerationService) Create(
@@ -200,6 +241,23 @@ func (s *GenerationService) Process(
 		return fail(err)
 	}
 
+	// 开始构造带工具的上下文
+	generateMessages := newGenerateMessages(messages)
+
+	// 查询每条信息调用过的工具，并把工具调用结果构造成工具交换记录放到上下文里面
+	for i := range generateMessages {
+		if generateMessages[i].Role != entity.MessageRoleAssistant {
+			continue
+		}
+
+		records, err := s.toolCallRepo.ListByAssistantMessageID(ctx, generateMessages[i].ID)
+		if err != nil {
+			return fail(err)
+		}
+
+		generateMessages[i].ToolExchanges = newToolExchangesFromRecords(records)
+	}
+
 	generator, err := s.generatorFactory.Get(modelConfig)
 	if err != nil {
 		return fail(err)
@@ -228,17 +286,29 @@ func (s *GenerationService) Process(
 		return fail(err)
 	}
 
-	var toolResults []ToolResult
+	var toolExchanges []ToolExchange
 	completed := false
 
 	for round := 1; round <= defaultMaxToolRounds; round++ {
 		var calls []ToolCall
 
+		roundMessages := make([]GenerateMessage, 0, len(generateMessages)+1)
+		roundMessages = append(roundMessages, generateMessages...)
+
+		snapshot := task.Snapshot()
+		if snapshot.Content != "" || len(toolExchanges) > 0 {
+			roundMessages = append(roundMessages, GenerateMessage{
+				ID:            assistantMessageID,
+				Role:          entity.MessageRoleAssistant,
+				Content:       snapshot.Content,
+				ToolExchanges: toolExchanges,
+			})
+		}
+
 		err = generator.Generate(ctx, GenerateInput{
-			Model:       modelConfig,
-			Messages:    messages,
-			Tools:       tools,
-			ToolResults: toolResults,
+			Model:    modelConfig,
+			Messages: roundMessages,
+			Tools:    tools,
 		}, GenerateCallbacks{
 			ContentDelta:   task.AppendContent,
 			ReasoningDelta: task.AppendReasoningContent,
@@ -257,6 +327,10 @@ func (s *GenerationService) Process(
 		}
 
 		for i, modelCall := range calls {
+			if modelCall.ID == "" {
+				modelCall.ID = newGeneratedToolCallID(assistantMessageID, round, i+1)
+			}
+
 			record := &entity.ToolCall{
 				ConversationID:     conversationID,
 				AssistantMessageID: assistantMessageID,
@@ -269,7 +343,7 @@ func (s *GenerationService) Process(
 				Round:              round,
 				Seq:                i + 1,
 			}
-			
+
 			//在数据库创建工具调用记录
 			if err := s.toolCallRepo.Create(ctx, record); err != nil {
 				return fail(err)
@@ -287,7 +361,7 @@ func (s *GenerationService) Process(
 			})
 
 			//添加占位符，保持文本和工具调用的顺序性方便前端展示
-			task.AppendContent("\n\n<!--tool_call:" + strconv.FormatInt(record.ID, 10) + "-->\n\n")
+			task.AppendContent("\n\n<!--tool_call:" + record.ProviderCallID + "-->\n\n")
 
 			err := s.toolCallRepo.MarkRunning(ctx, record.ID)
 			if err != nil {
@@ -307,10 +381,15 @@ func (s *GenerationService) Process(
 				}
 
 				//把失败结果交给AI处理
-				toolResults = append(toolResults, ToolResult{
+				toolResults := ToolResult{
 					ToolCallID: modelCall.ID,
 					Name:       modelCall.Name,
 					Result:     payload,
+				}
+
+				toolExchanges = append(toolExchanges, ToolExchange{
+					Call:   modelCall,
+					Result: toolResults,
 				})
 
 				err = s.toolCallRepo.MarkFailed(ctx, record.ID, string(payload), err.Error())
@@ -329,7 +408,10 @@ func (s *GenerationService) Process(
 			}
 			task.UpdateToolCallDone(record.ID, string(toolResult.Result))
 
-			toolResults = append(toolResults, toolResult)
+			toolExchanges = append(toolExchanges, ToolExchange{
+				Call:   modelCall,
+				Result: toolResult,
+			})
 		}
 	}
 

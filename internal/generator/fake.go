@@ -43,11 +43,15 @@ func emitParts(ctx context.Context, cb service.GenerateCallbacks, parts []string
 }
 
 func (g *FakeGenerator) Generate(ctx context.Context, input service.GenerateInput, cb service.GenerateCallbacks) error {
-	if len(input.ToolResults) > 0 {
-		return emitParts(ctx, cb, []string{
-			"fake tool result: ",
-			string(input.ToolResults[0].Result),
-		})
+	if len(input.Messages) > 0 {
+		last := input.Messages[len(input.Messages)-1]
+		if len(last.ToolExchanges) > 0 {
+			exchange := last.ToolExchanges[len(last.ToolExchanges)-1]
+			return emitParts(ctx, cb, []string{
+				"fake tool result: ",
+				string(exchange.Result.Result),
+			})
+		}
 	}
 
 	if hasTool(input.Tools, tool.ToolGetCurrentTime) {
