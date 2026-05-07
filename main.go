@@ -56,6 +56,7 @@ func main() {
 	runtimeManager := stream.NewManager()
 
 	toolCallRepo := repository.NewToolCallRepository(mysqlDB)
+	toolCallService := service.NewToolCallService(toolCallRepo)
 	toolProviderManager := service.NewToolProviderManager(
 		tool.NewBuiltinProvider(),
 	)
@@ -101,7 +102,7 @@ func main() {
 		time.Duration(cfg.GenerationRetryInterval)*time.Second,
 		int(cfg.GenerationRetryMax),
 	)
-	generationHandler := handler.NewGenerationHandler(generationService, messageService, runtimeManager)
+	generationHandler := handler.NewGenerationHandler(generationService, messageService, toolCallService, runtimeManager)
 
 	go generationService.RetryLoop(context.Background())
 

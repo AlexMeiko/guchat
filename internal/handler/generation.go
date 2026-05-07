@@ -17,6 +17,7 @@ import (
 type GenerationHandler struct {
 	generationService *service.GenerationService
 	messageService    *service.MessageService
+	toolCallService   *service.ToolCallService
 	runtimeManager    *stream.Manager
 }
 
@@ -30,10 +31,16 @@ const (
 	generationEventToolCallUpdated = "tool_call.updated"
 )
 
-func NewGenerationHandler(generationService *service.GenerationService, messageService *service.MessageService, runtimeManager *stream.Manager) *GenerationHandler {
+func NewGenerationHandler(
+	generationService *service.GenerationService,
+	messageService *service.MessageService,
+	toolCallService *service.ToolCallService,
+	runtimeManager *stream.Manager,
+) *GenerationHandler {
 	return &GenerationHandler{
 		generationService: generationService,
 		messageService:    messageService,
+		toolCallService:   toolCallService,
 		runtimeManager:    runtimeManager,
 	}
 }
@@ -173,13 +180,19 @@ func (h *GenerationHandler) Events(c *gin.Context) {
 
 	task, exists := h.runtimeManager.Get(message.ID)
 	if !exists {
+		toolCalls, err := h.toolCallService.ListByAssistantMessageID(c.Request.Context(), message.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: "internal server error"})
+			return
+		}
+
 		_ = writeSSE(c, generationEventSnapshot, newGenerationSnapshotEvent(
 			message.ID,
 			message.Status,
 			message.Content,
 			message.ReasoningContent,
 			message.ErrorMessage,
-			nil, // TODO: 暂时传nil，后徐等完善tool_calls数据库查询再修改
+			newToolCallSnapshots(toolCalls),
 		))
 		return
 	}
@@ -288,6 +301,29 @@ func newGenerationSnapshotEvent(
 		ToolCalls:        newToolCallEvents(toolCalls),
 		Error:            errMsg,
 	}
+}
+
+func newToolCallSnapshots(toolCalls []entity.ToolCall) []stream.ToolCallSnapshot {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+
+	result := make([]stream.ToolCallSnapshot, len(toolCalls))
+	for i, call := range toolCalls {
+		result[i] = stream.ToolCallSnapshot{
+			ID:           call.ID,
+			ProviderID:   call.ProviderCallID,
+			Name:         call.ToolName,
+			Arguments:    call.ArgumentsJSON,
+			Result:       call.ResultJSON,
+			Status:       call.Status,
+			ErrorMessage: call.ErrorMessage,
+			Round:        call.Round,
+			Seq:          call.Seq,
+		}
+	}
+
+	return result
 }
 
 func newToolCallEvents(toolCalls []stream.ToolCallSnapshot) []model.ToolCallEvent {
