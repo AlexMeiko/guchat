@@ -61,7 +61,7 @@ func main() {
 		tool.NewBuiltinProvider(),
 	)
 
-	messageHandler := handler.NewMessageHandler(messageService, runtimeManager)
+	messageHandler := handler.NewMessageHandler(messageService, toolCallService, runtimeManager)
 
 	modelRepo := repository.NewModelRepository(mysqlDB)
 	modelService := service.NewModelService(modelRepo)

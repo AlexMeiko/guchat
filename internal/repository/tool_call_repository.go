@@ -68,6 +68,23 @@ func (r *ToolCallRepository) ListByAssistantMessageID(ctx context.Context, assis
 	return toolCalls, err
 }
 
+func (r *ToolCallRepository) ListByAssistantMessageIDs(ctx context.Context, assistantMessageIDs []string) ([]entity.ToolCall, error) {
+	if len(assistantMessageIDs) == 0 {
+		return nil, nil
+	}
+
+	query, args, err := sqlx.In(`SELECT * FROM tool_calls WHERE assistant_message_id IN (?) ORDER BY assistant_message_id, round, seq, id`, assistantMessageIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	query = r.db.Rebind(query)
+
+	var toolCalls []entity.ToolCall
+	err = r.db.SelectContext(ctx, &toolCalls, query, args...)
+	return toolCalls, err
+}
+
 func (r *ToolCallRepository) MarkRunning(ctx context.Context, id int64) error {
 	const query = `UPDATE tool_calls SET status = ?, started_at = NOW(3), error_message = '' WHERE id = ?`
 	_, err := r.db.ExecContext(ctx, query, entity.ToolCallStatusRunning, id)

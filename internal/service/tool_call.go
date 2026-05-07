@@ -21,3 +21,10 @@ func (s *ToolCallService) ListByAssistantMessageID(
 ) ([]entity.ToolCall, error) {
 	return s.toolCallRepo.ListByAssistantMessageID(ctx, assistantMessageID)
 }
+
+func (s *ToolCallService) ListByAssistantMessageIDs(
+	ctx context.Context,
+	assistantMessageIDs []string,
+) ([]entity.ToolCall, error) {
+	return s.toolCallRepo.ListByAssistantMessageIDs(ctx, assistantMessageIDs)
+}

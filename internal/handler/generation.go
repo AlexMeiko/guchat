@@ -127,7 +127,7 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, newMessageResponse(message))
+	c.JSON(http.StatusCreated, newMessageResponse(message, nil))
 }
 
 func (h *GenerationHandler) Events(c *gin.Context) {

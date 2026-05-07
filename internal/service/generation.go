@@ -58,6 +58,7 @@ type GenerationService struct {
 	retryItems map[string]*generationRetryItem
 }
 
+// 用于在 provider 没有返回工具调用 ID 时生成稳定 ID，保证占位符、落库记录和工具结果能互相关联
 func newGeneratedToolCallID(assistantMessageID string, round int, seq int) string {
 	return fmt.Sprintf("call_%s_%d_%d", assistantMessageID, round, seq)
 }
@@ -94,31 +95,6 @@ func newGenerateMessages(messages []entity.Message) []GenerateMessage {
 			Content: message.Content,
 		})
 	}
-	return result
-}
-
-func newToolExchangesFromRecords(records []entity.ToolCall) []ToolExchange {
-	result := make([]ToolExchange, 0, len(records))
-
-	for _, record := range records {
-		if record.Status != entity.ToolCallStatusDone && record.Status != entity.ToolCallStatusFailed {
-			continue
-		}
-
-		result = append(result, ToolExchange{
-			Call: ToolCall{
-				ID:        record.ProviderCallID,
-				Name:      record.ToolName,
-				Arguments: json.RawMessage(record.ArgumentsJSON),
-			},
-			Result: ToolResult{
-				ToolCallID: record.ProviderCallID,
-				Name:       record.ToolName,
-				Result:     json.RawMessage(record.ResultJSON),
-			},
-		})
-	}
-
 	return result
 }
 
@@ -245,17 +221,22 @@ func (s *GenerationService) Process(
 	generateMessages := newGenerateMessages(messages)
 
 	// 查询每条信息调用过的工具，并把工具调用结果构造成工具交换记录放到上下文里面
+	assistantMessageIDs := make([]string, 0)
 	for i := range generateMessages {
-		if generateMessages[i].Role != entity.MessageRoleAssistant {
-			continue
+		if generateMessages[i].Role == entity.MessageRoleAssistant {
+			assistantMessageIDs = append(assistantMessageIDs, generateMessages[i].ID)
 		}
+	}
 
-		records, err := s.toolCallRepo.ListByAssistantMessageID(ctx, generateMessages[i].ID)
-		if err != nil {
-			return fail(err)
-		}
+	toolCallRecords, err := s.toolCallRepo.ListByAssistantMessageIDs(ctx, assistantMessageIDs)
+	if err != nil {
+		return fail(err)
+	}
 
-		generateMessages[i].ToolExchanges = newToolExchangesFromRecords(records)
+	toolExchangesByMessageID := groupToolExchangesByMessageID(toolCallRecords)
+
+	for i := range generateMessages {
+		generateMessages[i].ToolExchanges = toolExchangesByMessageID[generateMessages[i].ID]
 	}
 
 	generator, err := s.generatorFactory.Get(modelConfig)
@@ -520,6 +501,32 @@ func (s *GenerationService) Retry() {
 		s.removeRetry(item.MessageID)
 		s.runtimeManager.Delete(item.MessageID)
 	}
+}
+
+// 将历史工具调用记录按 assistant_message_id 分组
+func groupToolExchangesByMessageID(records []entity.ToolCall) map[string][]ToolExchange {
+	result := make(map[string][]ToolExchange)
+
+	for _, record := range records {
+		if record.Status != entity.ToolCallStatusDone && record.Status != entity.ToolCallStatusFailed {
+			continue
+		}
+
+		result[record.AssistantMessageID] = append(result[record.AssistantMessageID], ToolExchange{
+			Call: ToolCall{
+				ID:        record.ProviderCallID,
+				Name:      record.ToolName,
+				Arguments: json.RawMessage(record.ArgumentsJSON),
+			},
+			Result: ToolResult{
+				ToolCallID: record.ProviderCallID,
+				Name:       record.ToolName,
+				Result:     json.RawMessage(record.ResultJSON),
+			},
+		})
+	}
+
+	return result
 }
 
 func (s *GenerationService) removeRetry(messageID string) {
