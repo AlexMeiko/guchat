@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"sync"
 	"time"
 
@@ -268,14 +269,31 @@ func (s *GenerationService) Process(
 				Round:              round,
 				Seq:                i + 1,
 			}
+			
+			//在数据库创建工具调用记录
 			if err := s.toolCallRepo.Create(ctx, record); err != nil {
 				return fail(err)
 			}
+
+			task.AddToolCall(stream.ToolCallSnapshot{
+				ID:         record.ID,
+				ProviderID: record.ProviderCallID,
+				Name:       record.ToolName,
+				Arguments:  record.ArgumentsJSON,
+				Result:     record.ResultJSON,
+				Status:     record.Status,
+				Round:      record.Round,
+				Seq:        record.Seq,
+			})
+
+			//添加占位符，保持文本和工具调用的顺序性方便前端展示
+			task.AppendContent("\n\n<!--tool_call:" + strconv.FormatInt(record.ID, 10) + "-->\n\n")
 
 			err := s.toolCallRepo.MarkRunning(ctx, record.ID)
 			if err != nil {
 				return fail(err)
 			}
+			task.UpdateToolCallRunning(record.ID)
 
 			toolResult, err := s.toolProviderManager.CallTool(ctx, UserContext{UserID: userID}, modelCall.Name, modelCall.Arguments)
 			if err != nil {
@@ -299,6 +317,7 @@ func (s *GenerationService) Process(
 				if err != nil {
 					return fail(err)
 				}
+				task.UpdateToolCallFailed(record.ID, string(payload), err.Error())
 
 				continue
 			}
@@ -308,6 +327,7 @@ func (s *GenerationService) Process(
 			if err := s.toolCallRepo.MarkDone(ctx, record.ID, string(toolResult.Result)); err != nil {
 				return fail(err)
 			}
+			task.UpdateToolCallDone(record.ID, string(toolResult.Result))
 
 			toolResults = append(toolResults, toolResult)
 		}
