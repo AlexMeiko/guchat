@@ -14,6 +14,7 @@ import (
 	"github.com/AlexMeiko/guchat/internal/router"
 	"github.com/AlexMeiko/guchat/internal/service"
 	"github.com/AlexMeiko/guchat/internal/stream"
+	"github.com/AlexMeiko/guchat/internal/tool"
 )
 
 func main() {
@@ -54,6 +55,11 @@ func main() {
 
 	runtimeManager := stream.NewManager()
 
+	toolCallRepo := repository.NewToolCallRepository(mysqlDB)
+	toolProviderManager := service.NewToolProviderManager(
+		tool.NewBuiltinProvider(),
+	)
+
 	messageHandler := handler.NewMessageHandler(messageService, runtimeManager)
 
 	modelRepo := repository.NewModelRepository(mysqlDB)
@@ -90,6 +96,8 @@ func main() {
 		modelService,
 		generatorFactory,
 		runtimeManager,
+		toolProviderManager,
+		toolCallRepo,
 		time.Duration(cfg.GenerationRetryInterval)*time.Second,
 		int(cfg.GenerationRetryMax),
 	)

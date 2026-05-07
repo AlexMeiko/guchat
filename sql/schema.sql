@@ -59,12 +59,40 @@ CREATE TABLE models
     id         BIGINT PRIMARY KEY AUTO_INCREMENT,
     name       VARCHAR(64)  NOT NULL,
     provider   VARCHAR(32)  NOT NULL,
-    model_key  VARCHAR(64) NOT NULL,
+    model_key  VARCHAR(64)  NOT NULL,
     base_url   VARCHAR(255) NOT NULL,
     api_key    VARCHAR(255) NOT NULL,
-    extra_body TEXT NOT NULL,
+    extra_body TEXT         NOT NULL,
     is_enabled BOOLEAN      NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE = InnoDB;
 
+CREATE TABLE tool_calls
+(
+    id                   BIGINT PRIMARY KEY AUTO_INCREMENT,
+    conversation_id      CHAR(36)     NOT NULL,
+    assistant_message_id CHAR(36)     NOT NULL,
+    provider_call_id     VARCHAR(128) NOT NULL DEFAULT '',
+    tool_name            VARCHAR(128) NOT NULL,
+    arguments_json       MEDIUMTEXT   NOT NULL,
+    result_json          MEDIUMTEXT   NOT NULL,
+    status               VARCHAR(16)  NOT NULL DEFAULT 'pending',
+    error_message        TEXT         NOT NULL,
+    round                INT          NOT NULL,
+    seq                  INT          NOT NULL,
+    started_at           DATETIME(3)  NULL,
+    finished_at          DATETIME(3)  NULL,
+    created_at           TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+
+    KEY idx_tool_calls_message_round_seq (assistant_message_id, round, seq),
+    KEY idx_tool_calls_conversation_id (conversation_id),
+    KEY idx_tool_calls_tool_name (tool_name),
+
+    CONSTRAINT fk_tool_calls_conversation_id
+        FOREIGN KEY (conversation_id) REFERENCES conversations (id)
+            ON DELETE CASCADE,
+    CONSTRAINT fk_tool_calls_assistant_message_id
+        FOREIGN KEY (assistant_message_id) REFERENCES messages (id)
+            ON DELETE CASCADE
+) ENGINE = InnoDB;

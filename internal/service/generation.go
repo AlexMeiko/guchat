@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
 
 	"github.com/AlexMeiko/guchat/internal/entity"
+	"github.com/AlexMeiko/guchat/internal/repository"
 	"github.com/AlexMeiko/guchat/internal/stream"
 )
 
@@ -15,14 +17,23 @@ var (
 	ErrGenerationTaskNotFound = errors.New("generation task not found")
 )
 
+const (
+	ToolModeNone = "none"
+	ToolModeAuto = "auto"
+)
+
 // TODO: 默认上下文限制，后面放到config里
 const defaultGenerationContextLimit = 25
+
+// TODO: 调用工具最大轮次，每轮可以调用多个工具，后面放到config里
+const defaultMaxToolRounds = 8
 
 type CreateGenerationInput struct {
 	ConversationID  string
 	SourceMessageID string
 	ModelID         int64
 	ContextLimit    int
+	ToolMode        string
 }
 
 type generationRetryItem struct {
@@ -33,12 +44,14 @@ type generationRetryItem struct {
 }
 
 type GenerationService struct {
-	messageService   *MessageService
-	modelService     *ModelService
-	generatorFactory GeneratorFactory
-	runtimeManager   *stream.Manager
-	retryInterval    time.Duration
-	retryMax         int
+	messageService      *MessageService
+	modelService        *ModelService
+	generatorFactory    GeneratorFactory
+	runtimeManager      *stream.Manager
+	toolProviderManager *ToolProviderManager
+	toolCallRepo        *repository.ToolCallRepository
+	retryInterval       time.Duration
+	retryMax            int
 
 	retryMu    sync.Mutex
 	retryItems map[string]*generationRetryItem
@@ -49,17 +62,21 @@ func NewGenerationService(
 	modelService *ModelService,
 	generatorFactory GeneratorFactory,
 	runtimeManager *stream.Manager,
+	toolProviderManager *ToolProviderManager,
+	toolCallRepo *repository.ToolCallRepository,
 	retryInterval time.Duration,
 	retryMax int,
 ) *GenerationService {
 	return &GenerationService{
-		messageService:   messageService,
-		modelService:     modelService,
-		generatorFactory: generatorFactory,
-		runtimeManager:   runtimeManager,
-		retryInterval:    retryInterval,
-		retryMax:         retryMax,
-		retryItems:       make(map[string]*generationRetryItem),
+		messageService:      messageService,
+		modelService:        modelService,
+		generatorFactory:    generatorFactory,
+		runtimeManager:      runtimeManager,
+		toolProviderManager: toolProviderManager,
+		toolCallRepo:        toolCallRepo,
+		retryInterval:       retryInterval,
+		retryMax:            retryMax,
+		retryItems:          make(map[string]*generationRetryItem),
 	}
 }
 
@@ -116,6 +133,7 @@ func (s *GenerationService) Create(
 			sourceMessage.Seq,
 			input.ModelID,
 			input.ContextLimit,
+			input.ToolMode,
 		)
 	}()
 
@@ -130,6 +148,7 @@ func (s *GenerationService) Process(
 	sourceMessageSeq int,
 	modelID int64,
 	userContextLimit int,
+	toolMode string,
 ) error {
 	task, ok := s.runtimeManager.Get(assistantMessageID)
 	if !ok {
@@ -185,6 +204,16 @@ func (s *GenerationService) Process(
 		return fail(err)
 	}
 
+	var tools []ToolDefinition
+	if toolMode == ToolModeAuto {
+		tools, err = s.toolProviderManager.ListTools(ctx, UserContext{
+			UserID: userID,
+		})
+		if err != nil {
+			return fail(err)
+		}
+	}
+
 	task.Start()
 
 	if err := s.messageService.UpdateGeneratedMessage(ctx, userID, UpdateGeneratedMessageInput{
@@ -198,18 +227,96 @@ func (s *GenerationService) Process(
 		return fail(err)
 	}
 
-	err = generator.Generate(ctx, GenerateInput{
-		Model:    modelConfig,
-		Messages: messages,
-	}, GenerateCallbacks{
-		task.AppendContent,
-		task.AppendReasoningContent,
-	})
-	if err != nil {
-		return fail(err)
+	var toolResults []ToolResult
+	completed := false
+
+	for round := 1; round <= defaultMaxToolRounds; round++ {
+		var calls []ToolCall
+
+		err = generator.Generate(ctx, GenerateInput{
+			Model:       modelConfig,
+			Messages:    messages,
+			Tools:       tools,
+			ToolResults: toolResults,
+		}, GenerateCallbacks{
+			ContentDelta:   task.AppendContent,
+			ReasoningDelta: task.AppendReasoningContent,
+			ToolCallCreated: func(call ToolCall) {
+				calls = append(calls, call)
+			},
+		})
+		if err != nil {
+			return fail(err)
+		}
+
+		if len(calls) == 0 {
+			task.Done()
+			completed = true
+			break
+		}
+
+		for i, modelCall := range calls {
+			record := &entity.ToolCall{
+				ConversationID:     conversationID,
+				AssistantMessageID: assistantMessageID,
+				ProviderCallID:     modelCall.ID,
+				ToolName:           modelCall.Name,
+				ArgumentsJSON:      string(modelCall.Arguments),
+				ResultJSON:         "",
+				Status:             entity.ToolCallStatusPending,
+				ErrorMessage:       "",
+				Round:              round,
+				Seq:                i + 1,
+			}
+			if err := s.toolCallRepo.Create(ctx, record); err != nil {
+				return fail(err)
+			}
+
+			err := s.toolCallRepo.MarkRunning(ctx, record.ID)
+			if err != nil {
+				return fail(err)
+			}
+
+			toolResult, err := s.toolProviderManager.CallTool(ctx, UserContext{UserID: userID}, modelCall.Name, modelCall.Arguments)
+			if err != nil {
+				//工具执行失败
+				payload, marshalErr := json.Marshal(map[string]any{
+					"ok":    false,
+					"error": err.Error(),
+				})
+				if marshalErr != nil {
+					return fail(errors.Join(err, marshalErr))
+				}
+
+				//把失败结果交给AI处理
+				toolResults = append(toolResults, ToolResult{
+					ToolCallID: modelCall.ID,
+					Name:       modelCall.Name,
+					Result:     payload,
+				})
+
+				err = s.toolCallRepo.MarkFailed(ctx, record.ID, string(payload), err.Error())
+				if err != nil {
+					return fail(err)
+				}
+
+				continue
+			}
+
+			toolResult.ToolCallID = modelCall.ID
+
+			if err := s.toolCallRepo.MarkDone(ctx, record.ID, string(toolResult.Result)); err != nil {
+				return fail(err)
+			}
+
+			toolResults = append(toolResults, toolResult)
+		}
 	}
 
-	task.Done()
+	if !completed {
+		return fail(errors.New("max tool rounds exceeded"))
+	}
+
 	snapshot := task.Snapshot()
 
 	if err := s.messageService.UpdateGeneratedMessage(ctx, userID, UpdateGeneratedMessageInput{

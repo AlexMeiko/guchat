@@ -64,16 +64,29 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 		contextLimit = *req.ContextLimit
 	}
 
+	toolMode := req.ToolMode
+	if toolMode == "" {
+		toolMode = service.ToolModeAuto
+	}
+
+	switch toolMode {
+	case service.ToolModeNone, service.ToolModeAuto:
+	default:
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid tool mode"})
+		return
+	}
+
 	user, ok := requireCurrentUser(c)
 	if !ok {
 		return
 	}
 
 	message, err := h.generationService.Create(c.Request.Context(), user.UserID, service.CreateGenerationInput{
-		conversationID,
-		messageID,
-		req.ModelID,
-		contextLimit,
+		ConversationID:  conversationID,
+		SourceMessageID: messageID,
+		ModelID:         req.ModelID,
+		ContextLimit:    contextLimit,
+		ToolMode:        toolMode,
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrConversationNotFound) {
