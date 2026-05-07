@@ -1,0 +1,259 @@
+# guchat-go
+
+`guchat-go` 是一个使用 Go + Gin 实现的 AI 聊天后端服务，提供用户鉴权、会话管理、消息管理、模型配置、AI 流式生成与 SSE 事件推送能力。项目目标是用清晰的分层结构实现一个可运行、可联调、便于扩展的聊天后端。
+
+## 功能特性
+
+- 支持用户注册、登录、Token 刷新与登出
+- 支持会话管理、消息管理和历史消息分页加载
+- 支持 AI 回复生成、流式输出和生成中取消
+- 支持 SSE 实时推送正文增量、推理增量和生成状态
+- 支持 OpenAI Chat Completions、Responses API 和本地 `fake` 生成器
+- 支持模型配置管理，可动态启用或停用模型
+- 采用 Handler / Service / Repository 分层结构，便于维护和扩展
+
+## 技术栈
+
+- Go `1.25.0`
+- Gin Web Framework
+- MySQL
+- sqlx + go-sql-driver/mysql
+- golang-jwt/jwt
+- godotenv
+
+## 项目结构
+
+```text
+.
+├── main.go                    # 服务启动与依赖组装
+├── internal
+│   ├── config                 # 环境变量配置加载
+│   ├── db                     # MySQL 连接初始化
+│   ├── entity                 # 数据库实体
+│   ├── generator              # 生成器
+│   ├── handler                # HTTP Handler
+│   ├── middleware             # 鉴权中间件
+│   ├── model                  # 请求/响应模型
+│   ├── repository             # 数据访问层
+│   ├── router                 # 路由注册
+│   ├── service                # 业务逻辑层
+│   └── stream                 # SSE 运行时管理
+├── sql
+│   └── schema.sql             # MySQL 表结构
+├── docs
+│   └── api.md                 # API 详细文档
+└── .env.example               # 环境变量示例
+```
+
+## 快速开始
+
+### 1. 准备环境
+
+请先安装：
+
+- Go `1.25.0+`
+- MySQL `5.7+` 或兼容版本
+
+说明：当前 Go 最低版本由依赖约束决定，`gin v1.12.0` 要求 Go `1.25.0`。数据库侧未使用 MySQL 8.0 专属语法，MySQL `5.7+` 即可满足当前表结构和查询需求。
+
+### 2. 克隆并安装依赖
+
+```bash
+git clone https://github.com/AlexMeiko/guchat.git
+cd guchat-go
+go mod download
+```
+
+如果仓库目录名不是 `guchat-go`，请以实际目录为准。
+
+### 3. 初始化数据库
+
+创建数据库后导入表结构：
+
+```sql
+CREATE DATABASE guchat CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+```bash
+mysql -u root -p guchat < sql/schema.sql
+```
+
+### 4. 配置环境变量
+
+复制示例配置：
+
+```bash
+cp .env.example .env
+```
+
+Windows PowerShell：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+编辑 `.env`：
+
+```env
+PORT=8080
+DATABASE_URL=mysql://root:password@localhost:3306/guchat
+JWT_SECRET=please-change-to-a-long-random-secret
+JWT_ACCESS_TTL_SECONDS=3600
+JWT_REFRESH_TTL_SECONDS=2592000
+GENERATION_RETRY_INTERVAL_SECONDS=30
+GENERATION_RETRY_MAX=5
+```
+
+`DATABASE_URL` 支持 `mysql://user:password@host:port/dbname` 格式，也支持 go-sql-driver/mysql 的原生 DSN 格式。
+
+### 5. 启动服务
+
+```bash
+go run .
+```
+
+服务默认监听：
+
+```text
+http://localhost:8080
+```
+
+健康检查：
+
+```bash
+curl http://localhost:8080/health
+```
+
+## 接口概览
+
+基础前缀为 `/api`，除注册、登录、刷新、登出和健康检查外，其余接口默认需要：
+
+```http
+Authorization: Bearer <access_token>
+```
+
+常用接口：
+
+| 模块 | 方法与路径 | 说明 |
+| --- | --- | --- |
+| 健康检查 | `GET /health` | 检查服务状态 |
+| 鉴权 | `POST /api/auth/register` | 注册用户 |
+| 鉴权 | `POST /api/auth/login` | 登录并获取 Token |
+| 鉴权 | `POST /api/auth/refresh` | 刷新 Access Token |
+| 鉴权 | `POST /api/auth/logout` | 登出并撤销 Refresh Token |
+| 用户 | `GET /api/me` | 获取当前用户 |
+| 会话 | `GET /api/conversations` | 获取会话列表 |
+| 会话 | `POST /api/conversations` | 创建会话 |
+| 消息 | `GET /api/conversations/:conversation_id/messages` | 分页获取消息 |
+| 消息 | `POST /api/conversations/:conversation_id/messages` | 创建消息 |
+| 生成 | `POST /api/conversations/:conversation_id/messages/:message_id/generation` | 触发 AI 回复生成 |
+| 生成 | `GET /api/conversations/:conversation_id/messages/:message_id/events` | 订阅 SSE 事件 |
+| 模型 | `GET /api/models` | 获取已启用模型 |
+| 模型管理 | `GET /api/admin/models` | 获取全部模型，需 admin |
+| 模型管理 | `POST /api/admin/models` | 创建模型，需 admin |
+
+完整接口说明见 `docs/api.md`。
+
+## 模型配置
+
+模型配置存储在 `models` 表中，可通过 `/api/admin/models` 管理。
+
+当前支持的 `provider`：
+
+- `openai`：调用 Chat Completions 风格接口
+- `openai_responses`：调用 Responses 风格接口
+- `fake`：本地假流式生成器，适合开发联调
+
+创建模型示例：
+
+```bash
+curl -X POST "http://localhost:8080/api/admin/models" \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name":"DeepSeek R1",
+    "provider":"openai",
+    "model_key":"deepseek-r1-0528",
+    "base_url":"https://api.openai.com/v1",
+    "api_key":"sk-xxx",
+    "extra_body":{"temperature":0.3},
+    "is_enabled":true
+  }'
+```
+
+`extra_body` 会合并进上游模型请求体，但不能覆盖项目保留字段，例如 `model`、`messages`、`input`、`stream` 等。具体规则见 `docs/api.md`。
+
+## SSE 事件
+
+生成接口会创建 assistant 消息，客户端可订阅该消息的事件流：
+
+```bash
+curl -N "http://localhost:8080/api/conversations/<conversation_id>/messages/<assistant_message_id>/events" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+主要事件：
+
+- `message.snapshot`：当前消息快照
+- `message.delta`：正文增量
+- `message.reasoning_delta`：推理内容增量
+- `message.completed`：生成完成
+- `message.failed`：生成失败
+
+## 构建与部署
+
+直接构建当前平台：
+
+```bash
+go build .
+```
+
+指定输出文件名：
+
+```bash
+go build -o guchat .
+```
+
+交叉编译示例：
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o guchat .
+GOOS=windows GOARCH=amd64 go build -o guchat.exe .
+```
+
+部署时请同时准备：
+
+- 可执行文件
+- `.env` 配置文件
+- 已执行 `sql/schema.sql` 初始化的 MySQL 数据库
+
+## 开发说明
+
+- Handler 层负责请求解析和响应输出，核心业务放在 Service 层
+- Repository 层负责数据库访问，避免业务逻辑散落在 SQL 调用处
+- 涉及消息顺序、生成状态、重试恢复等逻辑时，优先保持 SQL 与事务语义清晰
+- API 行为以当前实现和 `docs/api.md` 为准
+
+## 常见问题
+
+### 启动时报 `JWT_SECRET is required`
+
+请检查 `.env` 是否存在，并确认 `JWT_SECRET` 已配置为非空字符串。
+
+### 启动时报 `DATABASE_URL is required`
+
+请检查 `.env` 中的 `DATABASE_URL`，并确认数据库已创建、账号密码正确。
+
+### 数据库时间字段解析异常
+
+项目连接 MySQL 时会启用 `parseTime=true`，如果使用原生 DSN，请确保包含等价配置。
+
+### 管理模型接口返回 `403`
+
+`/api/admin/models` 相关接口需要 `admin` 角色用户访问。
+
+## 相关文档
+
+- API 文档：`docs/api.md`
+- 数据库表结构：`sql/schema.sql`
+- 环境变量示例：`.env.example`
