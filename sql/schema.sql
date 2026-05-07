@@ -87,7 +87,6 @@ CREATE TABLE tool_calls
 
     KEY idx_tool_calls_message_round_seq (assistant_message_id, round, seq),
     KEY idx_tool_calls_conversation_id (conversation_id),
-    KEY idx_tool_calls_tool_name (tool_name),
 
     CONSTRAINT fk_tool_calls_conversation_id
         FOREIGN KEY (conversation_id) REFERENCES conversations (id)
