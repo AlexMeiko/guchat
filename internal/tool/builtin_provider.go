@@ -38,10 +38,9 @@ type tavilySearchArgs struct {
 }
 
 type tavilySearchRequest struct {
-	Query             string `json:"query"`
-	SearchDepth       string `json:"search_depth"`
-	MaxResults        int    `json:"max_results"`
-	IncludeRawContent string `json:"include_raw_content"`
+	Query       string `json:"query"`
+	SearchDepth string `json:"search_depth"`
+	MaxResults  int    `json:"max_results"`
 }
 
 func NewBuiltinProvider() *BuiltinProvider {
@@ -148,10 +147,9 @@ func (p *BuiltinProvider) tavilySearch(ctx context.Context, args json.RawMessage
 	}
 
 	reqBody := tavilySearchRequest{
-		Query:             input.Query,
-		SearchDepth:       "advanced",
-		MaxResults:        20,
-		IncludeRawContent: "markdown",
+		Query:       input.Query,
+		SearchDepth: "advanced",
+		MaxResults:  10,
 	}
 
 	payload, err := json.Marshal(reqBody)
