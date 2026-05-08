@@ -350,15 +350,17 @@ func (s *GenerationService) Process(
 			}
 			task.UpdateToolCallRunning(record.ID)
 
-			toolResult, err := s.toolProviderManager.CallTool(ctx, UserContext{UserID: userID}, modelCall.Name, modelCall.Arguments)
-			if err != nil {
+			toolResult, toolErr := s.toolProviderManager.CallTool(ctx, UserContext{UserID: userID}, modelCall.Name, modelCall.Arguments)
+
+			if toolErr != nil {
+				toolErrorMessage := toolErr.Error()
 				//工具执行失败
 				payload, marshalErr := json.Marshal(map[string]any{
 					"ok":    false,
-					"error": err.Error(),
+					"error": toolErrorMessage,
 				})
 				if marshalErr != nil {
-					return fail(errors.Join(err, marshalErr))
+					return fail(errors.Join(toolErr, marshalErr))
 				}
 
 				//把失败结果交给AI处理
@@ -373,11 +375,11 @@ func (s *GenerationService) Process(
 					Result: toolResults,
 				})
 
-				err = s.toolCallRepo.MarkFailed(ctx, record.ID, string(payload), err.Error())
-				if err != nil {
-					return fail(err)
+				markErr := s.toolCallRepo.MarkFailed(ctx, record.ID, string(payload), toolErrorMessage)
+				if markErr != nil {
+					return fail(errors.Join(toolErr, markErr))
 				}
-				task.UpdateToolCallFailed(record.ID, string(payload), err.Error())
+				task.UpdateToolCallFailed(record.ID, string(payload), toolErrorMessage)
 
 				continue
 			}
