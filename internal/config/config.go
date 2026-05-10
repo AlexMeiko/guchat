@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -15,9 +16,15 @@ type Config struct {
 	JWTSecret               string
 	JWTAccessTTL            int64
 	JWTRefreshTTL           int64
+	GenerationContextLimit  int
+	GenerationMaxToolRounds int
 	GenerationRetryInterval int64
 	GenerationRetryMax      int64
+	TavilyAPIKey            string
+	TavilyBaseURL           string
 }
+
+const defaultTavilyBaseURL = "https://api.tavily.com"
 
 func Load() (Config, error) {
 	_ = godotenv.Load()
@@ -38,8 +45,12 @@ func Load() (Config, error) {
 		JWTSecret:               jwtSecret,
 		JWTAccessTTL:            getEnvInt64("JWT_ACCESS_TTL_SECONDS", 3600),
 		JWTRefreshTTL:           getEnvInt64("JWT_REFRESH_TTL_SECONDS", 2592000),
+		GenerationContextLimit:  max(int(getEnvInt64("GENERATION_CONTEXT_LIMIT", 25)), 1),
+		GenerationMaxToolRounds: max(int(getEnvInt64("GENERATION_MAX_TOOL_ROUNDS", 12)), 1),
 		GenerationRetryInterval: max(getEnvInt64("GENERATION_RETRY_INTERVAL_SECONDS", 30), 1),
 		GenerationRetryMax:      max(getEnvInt64("GENERATION_RETRY_MAX", 5), 1),
+		TavilyAPIKey:            strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
+		TavilyBaseURL:           strings.TrimRight(strings.TrimSpace(getEnv("TAVILY_BASE_URL", defaultTavilyBaseURL)), "/"),
 	}, nil
 }
 

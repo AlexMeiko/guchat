@@ -58,7 +58,10 @@ func main() {
 	toolCallRepo := repository.NewToolCallRepository(mysqlDB)
 	toolCallService := service.NewToolCallService(toolCallRepo)
 	toolProviderManager := service.NewToolProviderManager(
-		tool.NewBuiltinProvider(),
+		tool.NewBuiltinProvider(tool.BuiltinProviderConfig{
+			TavilyAPIKey:  cfg.TavilyAPIKey,
+			TavilyBaseURL: cfg.TavilyBaseURL,
+		}),
 	)
 
 	messageHandler := handler.NewMessageHandler(messageService, toolCallService, runtimeManager)
@@ -99,6 +102,8 @@ func main() {
 		runtimeManager,
 		toolProviderManager,
 		toolCallRepo,
+		cfg.GenerationContextLimit,
+		cfg.GenerationMaxToolRounds,
 		time.Duration(cfg.GenerationRetryInterval)*time.Second,
 		int(cfg.GenerationRetryMax),
 	)

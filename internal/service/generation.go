@@ -23,12 +23,6 @@ const (
 	ToolModeAuto = "auto"
 )
 
-// TODO: 默认上下文限制，后面放到config里
-const defaultGenerationContextLimit = 25
-
-// TODO: 调用工具最大轮次，每轮可以调用多个工具，后面放到config里
-const defaultMaxToolRounds = 8
-
 type CreateGenerationInput struct {
 	ConversationID  string
 	SourceMessageID string
@@ -51,6 +45,8 @@ type GenerationService struct {
 	runtimeManager      *stream.Manager
 	toolProviderManager *ToolProviderManager
 	toolCallRepo        *repository.ToolCallRepository
+	defaultContextLimit int
+	maxToolRounds       int
 	retryInterval       time.Duration
 	retryMax            int
 
@@ -70,6 +66,8 @@ func NewGenerationService(
 	runtimeManager *stream.Manager,
 	toolProviderManager *ToolProviderManager,
 	toolCallRepo *repository.ToolCallRepository,
+	defaultContextLimit int,
+	maxToolRounds int,
 	retryInterval time.Duration,
 	retryMax int,
 ) *GenerationService {
@@ -80,6 +78,8 @@ func NewGenerationService(
 		runtimeManager:      runtimeManager,
 		toolProviderManager: toolProviderManager,
 		toolCallRepo:        toolCallRepo,
+		defaultContextLimit: defaultContextLimit,
+		maxToolRounds:       maxToolRounds,
 		retryInterval:       retryInterval,
 		retryMax:            retryMax,
 		retryItems:          make(map[string]*generationRetryItem),
@@ -139,7 +139,7 @@ func (s *GenerationService) Create(
 	s.runtimeManager.Create(assistantMsg.ID, cancel)
 
 	if input.ContextLimit <= 0 {
-		input.ContextLimit = defaultGenerationContextLimit
+		input.ContextLimit = s.defaultContextLimit
 	}
 
 	go func() {
@@ -270,7 +270,7 @@ func (s *GenerationService) Process(
 	var toolExchanges []ToolExchange
 	completed := false
 
-	for round := 1; round <= defaultMaxToolRounds; round++ {
+	for round := 1; round <= s.maxToolRounds; round++ {
 		var calls []ToolCall
 
 		roundMessages := make([]GenerateMessage, 0, len(generateMessages)+1)

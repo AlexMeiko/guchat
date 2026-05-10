@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -17,9 +16,20 @@ import (
 const (
 	ToolGetCurrentTime = "get_current_time"
 	ToolTavilySearch   = "tavily_search"
+	ToolReadWebPage    = "read_web_page"
+
+	defaultTavilyBaseURL = "https://api.tavily.com"
 )
 
-type BuiltinProvider struct{}
+type BuiltinProviderConfig struct {
+	TavilyAPIKey  string
+	TavilyBaseURL string
+}
+
+type BuiltinProvider struct {
+	tavilyAPIKey  string
+	tavilyBaseURL string
+}
 
 // 时间工具
 type currentTimeArgs struct {
@@ -43,8 +53,16 @@ type tavilySearchRequest struct {
 	MaxResults  int    `json:"max_results"`
 }
 
-func NewBuiltinProvider() *BuiltinProvider {
-	return &BuiltinProvider{}
+func NewBuiltinProvider(cfg BuiltinProviderConfig) *BuiltinProvider {
+	tavilyBaseURL := strings.TrimRight(strings.TrimSpace(cfg.TavilyBaseURL), "/")
+	if tavilyBaseURL == "" {
+		tavilyBaseURL = defaultTavilyBaseURL
+	}
+
+	return &BuiltinProvider{
+		tavilyAPIKey:  strings.TrimSpace(cfg.TavilyAPIKey),
+		tavilyBaseURL: tavilyBaseURL,
+	}
 }
 
 func (p *BuiltinProvider) Name() string {
@@ -68,9 +86,28 @@ func (p *BuiltinProvider) ListTools(ctx context.Context, user service.UserContex
 				"additionalProperties": false
 			}`),
 		},
+		{
+			Name:        ToolReadWebPage,
+			Description: "读取指定公开网页 URL 的文本内容。当用户提供具体链接，或者搜索结果中已有目标链接且需要查看页面正文时使用。不要用于搜索未知网页。",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"url": {
+						"type": "string",
+						"description": "要读取的网页 URL"
+					},
+					"max_chars": {
+						"type": "integer",
+						"description": "要提取的最大字符数，多出的截断。默认为 10000"
+					}
+				},
+				"required": ["url"],
+				"additionalProperties": false
+			}`),
+		},
 	}
 
-	if strings.TrimSpace(os.Getenv("TAVILY_API_KEY")) != "" {
+	if p.tavilyAPIKey != "" {
 		tools = append(tools, service.ToolDefinition{
 			Name:        ToolTavilySearch,
 			Description: "搜索互联网信息并返回结果摘要与来源链接。当问题涉及最新信息、网页资料、新闻或需要外部来源时使用。",
@@ -97,6 +134,8 @@ func (p *BuiltinProvider) CallTool(ctx context.Context, user service.UserContext
 		return p.getCurrentTime(args)
 	case ToolTavilySearch:
 		return p.tavilySearch(ctx, args)
+	case ToolReadWebPage:
+		return p.readWebPage(ctx, args)
 	default:
 		return service.ToolResult{}, service.ErrToolNotFound
 	}
@@ -141,7 +180,7 @@ func (p *BuiltinProvider) tavilySearch(ctx context.Context, args json.RawMessage
 		return service.ToolResult{}, fmt.Errorf("query is required")
 	}
 
-	apiKey := strings.TrimSpace(os.Getenv("TAVILY_API_KEY"))
+	apiKey := p.tavilyAPIKey
 	if apiKey == "" {
 		return service.ToolResult{}, fmt.Errorf("TAVILY_API_KEY is required")
 	}
@@ -157,7 +196,7 @@ func (p *BuiltinProvider) tavilySearch(ctx context.Context, args json.RawMessage
 		return service.ToolResult{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.tavily.com/search", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.tavilyBaseURL+"/search", bytes.NewReader(payload))
 	if err != nil {
 		return service.ToolResult{}, err
 	}
