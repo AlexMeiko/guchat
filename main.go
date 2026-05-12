@@ -57,12 +57,25 @@ func main() {
 
 	toolCallRepo := repository.NewToolCallRepository(mysqlDB)
 	toolCallService := service.NewToolCallService(toolCallRepo)
-	toolProviderManager := service.NewToolProviderManager(
+
+	toolProviders := []service.ToolProvider{
 		tool.NewBuiltinProvider(tool.BuiltinProviderConfig{
 			TavilyAPIKey:  cfg.TavilyAPIKey,
 			TavilyBaseURL: cfg.TavilyBaseURL,
 		}),
-	)
+	}
+
+	if cfg.MCPURL != "" {
+		toolProviders = append(toolProviders, tool.NewMCPProvider(tool.MCPProviderConfig{
+			Name:      cfg.MCPName,
+			URL:       cfg.MCPURL,
+			AuthType:  cfg.MCPAuthType,
+			AuthField: cfg.MCPAuthField,
+			AuthKey:   cfg.MCPAuthKey,
+		}))
+	}
+
+	toolProviderManager := service.NewToolProviderManager(toolProviders...)
 
 	messageHandler := handler.NewMessageHandler(messageService, toolCallService, runtimeManager)
 

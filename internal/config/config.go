@@ -22,6 +22,12 @@ type Config struct {
 	GenerationRetryMax      int64
 	TavilyAPIKey            string
 	TavilyBaseURL           string
+
+	MCPName      string
+	MCPURL       string
+	MCPAuthType  string
+	MCPAuthField string
+	MCPAuthKey   string
 }
 
 const defaultTavilyBaseURL = "https://api.tavily.com"
@@ -51,6 +57,12 @@ func Load() (Config, error) {
 		GenerationRetryMax:      max(getEnvInt64("GENERATION_RETRY_MAX", 5), 1),
 		TavilyAPIKey:            strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
 		TavilyBaseURL:           strings.TrimRight(strings.TrimSpace(getEnv("TAVILY_BASE_URL", defaultTavilyBaseURL)), "/"),
+
+		MCPName:      strings.TrimSpace(getEnv("MCP_NAME", "mcp")),
+		MCPURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("MCP_URL")), "/"),
+		MCPAuthType:  strings.TrimSpace(getEnv("MCP_AUTH_TYPE", "none")),
+		MCPAuthField: strings.TrimSpace(os.Getenv("MCP_AUTH_FIELD")),
+		MCPAuthKey:   strings.TrimSpace(os.Getenv("MCP_AUTH_KEY")),
 	}, nil
 }
 
