@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"log"
 	"os"
@@ -23,11 +24,15 @@ type Config struct {
 	TavilyAPIKey            string
 	TavilyBaseURL           string
 
-	MCPName      string
-	MCPURL       string
-	MCPAuthType  string
-	MCPAuthField string
-	MCPAuthKey   string
+	MCPServers []MCPServerConfig
+}
+
+type MCPServerConfig struct {
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	AuthType  string `json:"auth_type"`
+	AuthField string `json:"auth_field"`
+	AuthKey   string `json:"auth_key"`
 }
 
 const defaultTavilyBaseURL = "https://api.tavily.com"
@@ -45,6 +50,11 @@ func Load() (Config, error) {
 		return Config{}, errors.New("DATABASE_URL is required")
 	}
 
+	mcpServers, err := loadMCPServers()
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		Port:                    getEnv("PORT", "8080"),
 		DatabaseURL:             databaseURL,
@@ -58,11 +68,7 @@ func Load() (Config, error) {
 		TavilyAPIKey:            strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
 		TavilyBaseURL:           strings.TrimRight(strings.TrimSpace(getEnv("TAVILY_BASE_URL", defaultTavilyBaseURL)), "/"),
 
-		MCPName:      strings.TrimSpace(getEnv("MCP_NAME", "mcp")),
-		MCPURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("MCP_URL")), "/"),
-		MCPAuthType:  strings.TrimSpace(getEnv("MCP_AUTH_TYPE", "none")),
-		MCPAuthField: strings.TrimSpace(os.Getenv("MCP_AUTH_FIELD")),
-		MCPAuthKey:   strings.TrimSpace(os.Getenv("MCP_AUTH_KEY")),
+		MCPServers: mcpServers,
 	}, nil
 }
 
@@ -92,4 +98,43 @@ func getEnvInt64(key string, fallback int64) int64 {
 	}
 
 	return parsed
+}
+
+func loadMCPServers() ([]MCPServerConfig, error) {
+	raw := strings.TrimSpace(os.Getenv("MCP_SERVERS"))
+	if raw == "" {
+		return nil, nil
+	}
+
+	var servers []MCPServerConfig
+	if err := json.Unmarshal([]byte(raw), &servers); err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]struct{}, len(servers))
+	for i := range servers {
+		servers[i].Name = strings.TrimSpace(servers[i].Name)
+		servers[i].URL = strings.TrimRight(strings.TrimSpace(servers[i].URL), "/")
+		servers[i].AuthType = strings.TrimSpace(servers[i].AuthType)
+		servers[i].AuthField = strings.TrimSpace(servers[i].AuthField)
+		servers[i].AuthKey = strings.TrimSpace(servers[i].AuthKey)
+
+		if servers[i].Name == "" {
+			return nil, errors.New("MCP_SERVERS server name is required")
+		}
+		if servers[i].URL == "" {
+			return nil, errors.New("MCP_SERVERS server url is required")
+		}
+		if _, ok := seen[servers[i].Name]; ok {
+			return nil, errors.New("MCP_SERVERS contains duplicate name")
+		}
+
+		seen[servers[i].Name] = struct{}{}
+
+		if servers[i].AuthType == "" {
+			servers[i].AuthType = "none"
+		}
+	}
+
+	return servers, nil
 }

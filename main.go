@@ -65,13 +65,17 @@ func main() {
 		}),
 	}
 
-	if cfg.MCPURL != "" {
+	for _, server := range cfg.MCPServers {
+		if server.URL == "" {
+			continue
+		}
+
 		toolProviders = append(toolProviders, tool.NewMCPProvider(tool.MCPProviderConfig{
-			Name:      cfg.MCPName,
-			URL:       cfg.MCPURL,
-			AuthType:  cfg.MCPAuthType,
-			AuthField: cfg.MCPAuthField,
-			AuthKey:   cfg.MCPAuthKey,
+			Name:      server.Name,
+			URL:       server.URL,
+			AuthType:  server.AuthType,
+			AuthField: server.AuthField,
+			AuthKey:   server.AuthKey,
 		}))
 	}
 
