@@ -28,11 +28,15 @@ type Config struct {
 }
 
 type MCPServerConfig struct {
-	Name      string `json:"name"`
-	URL       string `json:"url"`
-	AuthType  string `json:"auth_type"`
-	AuthField string `json:"auth_field"`
-	AuthKey   string `json:"auth_key"`
+	Name      string   `json:"name"`
+	URL       string   `json:"url"`
+	AuthType  string   `json:"auth_type"`
+	AuthField string   `json:"auth_field"`
+	AuthKey   string   `json:"auth_key"`
+	Transport string   `json:"transport"`
+	Command   string   `json:"command"`
+	Args      []string `json:"args"`
+	Env       []string `json:"env"`
 }
 
 const defaultTavilyBaseURL = "https://api.tavily.com"
@@ -118,18 +122,29 @@ func loadMCPServers() ([]MCPServerConfig, error) {
 		servers[i].AuthType = strings.TrimSpace(servers[i].AuthType)
 		servers[i].AuthField = strings.TrimSpace(servers[i].AuthField)
 		servers[i].AuthKey = strings.TrimSpace(servers[i].AuthKey)
+		servers[i].Transport = strings.TrimSpace(servers[i].Transport)
+		servers[i].Command = strings.TrimSpace(servers[i].Command)
 
 		if servers[i].Name == "" {
 			return nil, errors.New("MCP_SERVERS server name is required")
 		}
-		if servers[i].URL == "" {
-			return nil, errors.New("MCP_SERVERS server url is required")
-		}
 		if _, ok := seen[servers[i].Name]; ok {
 			return nil, errors.New("MCP_SERVERS contains duplicate name")
 		}
-
 		seen[servers[i].Name] = struct{}{}
+
+		switch servers[i].Transport {
+		case "http":
+			if servers[i].URL == "" {
+				return nil, errors.New("MCP_SERVERS http server url is required")
+			}
+		case "stdio":
+			if servers[i].Command == "" {
+				return nil, errors.New("MCP_SERVERS stdio server command is required")
+			}
+		default:
+			return nil, errors.New("MCP_SERVERS contains unsupported transport")
+		}
 
 		if servers[i].AuthType == "" {
 			servers[i].AuthType = "none"

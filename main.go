@@ -66,16 +66,16 @@ func main() {
 	}
 
 	for _, server := range cfg.MCPServers {
-		if server.URL == "" {
-			continue
-		}
-
 		toolProviders = append(toolProviders, tool.NewMCPProvider(tool.MCPProviderConfig{
 			Name:      server.Name,
 			URL:       server.URL,
 			AuthType:  server.AuthType,
 			AuthField: server.AuthField,
 			AuthKey:   server.AuthKey,
+			Transport: server.Transport,
+			Command:   server.Command,
+			Args:      server.Args,
+			Env:       server.Env,
 		}))
 	}
 
