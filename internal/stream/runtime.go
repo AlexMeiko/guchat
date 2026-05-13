@@ -8,11 +8,24 @@ import (
 	"github.com/AlexMeiko/guchat/internal/entity"
 )
 
+type ToolCallSnapshot struct {
+	ID           int64
+	ProviderID   string
+	Name         string
+	Arguments    string
+	Result       string
+	Status       string
+	ErrorMessage string
+	Round        int
+	Seq          int
+}
+
 type Snapshot struct {
 	MessageID        string
 	Status           string
 	Content          string
 	ReasoningContent string
+	ToolCalls        []ToolCallSnapshot
 	ErrorMessage     string
 }
 
@@ -22,6 +35,7 @@ type Task struct {
 	status           string
 	content          strings.Builder
 	reasoningContent strings.Builder
+	toolCalls        []ToolCallSnapshot
 	errorMessage     string
 	cancel           context.CancelFunc
 }
@@ -107,15 +121,65 @@ func (t *Task) AppendReasoningContent(delta string) {
 	t.reasoningContent.WriteString(delta)
 }
 
+func (t *Task) AddToolCall(call ToolCallSnapshot) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.toolCalls = append(t.toolCalls, call)
+}
+
+func (t *Task) UpdateToolCallRunning(id int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for i := range t.toolCalls {
+		if t.toolCalls[i].ID == id {
+			t.toolCalls[i].Status = entity.ToolCallStatusRunning
+			return
+		}
+	}
+}
+
+func (t *Task) UpdateToolCallDone(id int64, result string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for i := range t.toolCalls {
+		if t.toolCalls[i].ID == id {
+			t.toolCalls[i].Status = entity.ToolCallStatusDone
+			t.toolCalls[i].Result = result
+			return
+		}
+	}
+}
+
+func (t *Task) UpdateToolCallFailed(id int64, result string, errorMessage string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for i := range t.toolCalls {
+		if t.toolCalls[i].ID == id {
+			t.toolCalls[i].Status = entity.ToolCallStatusFailed
+			t.toolCalls[i].Result = result
+			t.toolCalls[i].ErrorMessage = errorMessage
+			return
+		}
+	}
+}
+
 func (t *Task) Snapshot() Snapshot {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+
+	toolCalls := make([]ToolCallSnapshot, len(t.toolCalls))
+	copy(toolCalls, t.toolCalls)
 
 	return Snapshot{
 		MessageID:        t.messageID,
 		Status:           t.status,
 		Content:          t.content.String(),
 		ReasoningContent: t.reasoningContent.String(),
+		ToolCalls:        toolCalls,
 		ErrorMessage:     t.errorMessage,
 	}
 }

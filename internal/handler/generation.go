@@ -17,21 +17,30 @@ import (
 type GenerationHandler struct {
 	generationService *service.GenerationService
 	messageService    *service.MessageService
+	toolCallService   *service.ToolCallService
 	runtimeManager    *stream.Manager
 }
 
 const (
-	generationEventSnapshot       = "message.snapshot"
-	generationEventDelta          = "message.delta"
-	generationEventReasoningDelta = "message.reasoning_delta"
-	generationEventCompleted      = "message.completed"
-	generationEventFailed         = "message.failed"
+	generationEventSnapshot        = "message.snapshot"
+	generationEventDelta           = "message.delta"
+	generationEventReasoningDelta  = "message.reasoning_delta"
+	generationEventCompleted       = "message.completed"
+	generationEventFailed          = "message.failed"
+	generationEventToolCallCreated = "tool_call.created"
+	generationEventToolCallUpdated = "tool_call.updated"
 )
 
-func NewGenerationHandler(generationService *service.GenerationService, messageService *service.MessageService, runtimeManager *stream.Manager) *GenerationHandler {
+func NewGenerationHandler(
+	generationService *service.GenerationService,
+	messageService *service.MessageService,
+	toolCallService *service.ToolCallService,
+	runtimeManager *stream.Manager,
+) *GenerationHandler {
 	return &GenerationHandler{
 		generationService: generationService,
 		messageService:    messageService,
+		toolCallService:   toolCallService,
 		runtimeManager:    runtimeManager,
 	}
 }
@@ -64,16 +73,29 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 		contextLimit = *req.ContextLimit
 	}
 
+	toolMode := req.ToolMode
+	if toolMode == "" {
+		toolMode = service.ToolModeAuto
+	}
+
+	switch toolMode {
+	case service.ToolModeNone, service.ToolModeAuto:
+	default:
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid tool mode"})
+		return
+	}
+
 	user, ok := requireCurrentUser(c)
 	if !ok {
 		return
 	}
 
 	message, err := h.generationService.Create(c.Request.Context(), user.UserID, service.CreateGenerationInput{
-		conversationID,
-		messageID,
-		req.ModelID,
-		contextLimit,
+		ConversationID:  conversationID,
+		SourceMessageID: messageID,
+		ModelID:         req.ModelID,
+		ContextLimit:    contextLimit,
+		ToolMode:        toolMode,
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrConversationNotFound) {
@@ -105,7 +127,7 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, newMessageResponse(message))
+	c.JSON(http.StatusCreated, newMessageResponse(message, nil))
 }
 
 func (h *GenerationHandler) Events(c *gin.Context) {
@@ -158,12 +180,19 @@ func (h *GenerationHandler) Events(c *gin.Context) {
 
 	task, exists := h.runtimeManager.Get(message.ID)
 	if !exists {
+		toolCalls, err := h.toolCallService.ListByAssistantMessageID(c.Request.Context(), message.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: "internal server error"})
+			return
+		}
+
 		_ = writeSSE(c, generationEventSnapshot, newGenerationSnapshotEvent(
 			message.ID,
 			message.Status,
 			message.Content,
 			message.ReasoningContent,
 			message.ErrorMessage,
+			newToolCallSnapshots(toolCalls),
 		))
 		return
 	}
@@ -175,6 +204,7 @@ func (h *GenerationHandler) Events(c *gin.Context) {
 		snapshot.Content,
 		snapshot.ReasoningContent,
 		snapshot.ErrorMessage,
+		snapshot.ToolCalls,
 	)); err != nil {
 		return
 	}
@@ -185,6 +215,7 @@ func (h *GenerationHandler) Events(c *gin.Context) {
 
 	sentContentOffset := len(snapshot.Content)
 	sentReasoningOffset := len(snapshot.ReasoningContent)
+	sentToolCalls := indexToolCalls(snapshot.ToolCalls)
 
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -197,6 +228,7 @@ func (h *GenerationHandler) Events(c *gin.Context) {
 		case <-ticker.C:
 			snapshot = task.Snapshot()
 
+			// 检查文本是否有增量
 			if len(snapshot.Content) > sentContentOffset {
 				delta := snapshot.Content[sentContentOffset:]
 				if err := writeSSE(c, generationEventDelta, newGenerationDeltaEvent(snapshot.MessageID, delta)); err != nil {
@@ -211,6 +243,27 @@ func (h *GenerationHandler) Events(c *gin.Context) {
 					return
 				}
 				sentReasoningOffset = len(snapshot.ReasoningContent)
+			}
+
+			//检查tool call状态是否有更新
+			for _, call := range snapshot.ToolCalls {
+				previous, exists := sentToolCalls[call.ID]
+				if !exists {
+					if err := writeSSE(c, generationEventToolCallCreated, newToolCallEvent(call)); err != nil {
+						return
+					}
+					sentToolCalls[call.ID] = call
+					continue
+				}
+
+				if previous.Status != call.Status ||
+					previous.Result != call.Result ||
+					previous.ErrorMessage != call.ErrorMessage {
+					if err := writeSSE(c, generationEventToolCallUpdated, newToolCallEvent(call)); err != nil {
+						return
+					}
+					sentToolCalls[call.ID] = call
+				}
 			}
 
 			switch snapshot.Status {
@@ -236,14 +289,54 @@ func (h *GenerationHandler) Events(c *gin.Context) {
 
 }
 
-func newGenerationSnapshotEvent(messageID, status, content, reasoningContent, errMsg string) model.GenerationEvent {
+func newGenerationSnapshotEvent(
+	messageID, status, content, reasoningContent, errMsg string,
+	toolCalls []stream.ToolCallSnapshot,
+) model.GenerationEvent {
 	return model.GenerationEvent{
 		MessageID:        messageID,
 		Status:           status,
 		Content:          content,
 		ReasoningContent: reasoningContent,
+		ToolCalls:        newToolCallEvents(toolCalls),
 		Error:            errMsg,
 	}
+}
+
+func newToolCallSnapshots(toolCalls []entity.ToolCall) []stream.ToolCallSnapshot {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+
+	result := make([]stream.ToolCallSnapshot, len(toolCalls))
+	for i, call := range toolCalls {
+		result[i] = stream.ToolCallSnapshot{
+			ID:           call.ID,
+			ProviderID:   call.ProviderCallID,
+			Name:         call.ToolName,
+			Arguments:    call.ArgumentsJSON,
+			Result:       call.ResultJSON,
+			Status:       call.Status,
+			ErrorMessage: call.ErrorMessage,
+			Round:        call.Round,
+			Seq:          call.Seq,
+		}
+	}
+
+	return result
+}
+
+func newToolCallEvents(toolCalls []stream.ToolCallSnapshot) []model.ToolCallEvent {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+
+	result := make([]model.ToolCallEvent, len(toolCalls))
+	for i, call := range toolCalls {
+		result[i] = newToolCallEvent(call)
+	}
+
+	return result
 }
 
 func newGenerationDeltaEvent(messageID, delta string) model.GenerationEvent {
@@ -287,4 +380,27 @@ func writeSSE(c *gin.Context, event string, data any) error {
 
 	c.Writer.Flush()
 	return nil
+}
+
+// 把toolCalls切片转换为以toolCall ID为key的map
+func indexToolCalls(toolCalls []stream.ToolCallSnapshot) map[int64]stream.ToolCallSnapshot {
+	result := make(map[int64]stream.ToolCallSnapshot, len(toolCalls))
+	for _, call := range toolCalls {
+		result[call.ID] = call
+	}
+	return result
+}
+
+func newToolCallEvent(call stream.ToolCallSnapshot) model.ToolCallEvent {
+	return model.ToolCallEvent{
+		ID:           call.ID,
+		ProviderID:   call.ProviderID,
+		Name:         call.Name,
+		Arguments:    call.Arguments,
+		Result:       call.Result,
+		Status:       call.Status,
+		ErrorMessage: call.ErrorMessage,
+		Round:        call.Round,
+		Seq:          call.Seq,
+	}
 }

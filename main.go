@@ -14,6 +14,7 @@ import (
 	"github.com/AlexMeiko/guchat/internal/router"
 	"github.com/AlexMeiko/guchat/internal/service"
 	"github.com/AlexMeiko/guchat/internal/stream"
+	"github.com/AlexMeiko/guchat/internal/tool"
 )
 
 func main() {
@@ -54,7 +55,33 @@ func main() {
 
 	runtimeManager := stream.NewManager()
 
-	messageHandler := handler.NewMessageHandler(messageService, runtimeManager)
+	toolCallRepo := repository.NewToolCallRepository(mysqlDB)
+	toolCallService := service.NewToolCallService(toolCallRepo)
+
+	toolProviders := []service.ToolProvider{
+		tool.NewBuiltinProvider(tool.BuiltinProviderConfig{
+			TavilyAPIKey:  cfg.TavilyAPIKey,
+			TavilyBaseURL: cfg.TavilyBaseURL,
+		}),
+	}
+
+	for _, server := range cfg.MCPServers {
+		toolProviders = append(toolProviders, tool.NewMCPProvider(tool.MCPProviderConfig{
+			Name:      server.Name,
+			URL:       server.URL,
+			AuthType:  server.AuthType,
+			AuthField: server.AuthField,
+			AuthKey:   server.AuthKey,
+			Transport: server.Transport,
+			Command:   server.Command,
+			Args:      server.Args,
+			Env:       server.Env,
+		}))
+	}
+
+	toolProviderManager := service.NewToolProviderManager(toolProviders...)
+
+	messageHandler := handler.NewMessageHandler(messageService, toolCallService, runtimeManager)
 
 	modelRepo := repository.NewModelRepository(mysqlDB)
 	modelService := service.NewModelService(modelRepo)
@@ -90,10 +117,14 @@ func main() {
 		modelService,
 		generatorFactory,
 		runtimeManager,
+		toolProviderManager,
+		toolCallRepo,
+		cfg.GenerationContextLimit,
+		cfg.GenerationMaxToolRounds,
 		time.Duration(cfg.GenerationRetryInterval)*time.Second,
 		int(cfg.GenerationRetryMax),
 	)
-	generationHandler := handler.NewGenerationHandler(generationService, messageService, runtimeManager)
+	generationHandler := handler.NewGenerationHandler(generationService, messageService, toolCallService, runtimeManager)
 
 	go generationService.RetryLoop(context.Background())
 

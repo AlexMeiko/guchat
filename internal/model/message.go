@@ -12,14 +12,15 @@ type UpdateMessageRequest struct {
 }
 
 type MessageResponse struct {
-	ID               string    `json:"id"`
-	ConversationID   string    `json:"conversation_id"`
-	Role             string    `json:"role"`
-	Content          string    `json:"content"`
-	ReasoningContent string    `json:"reasoning_content"`
-	Status           string    `json:"status"`
-	ErrorMessage     string    `json:"error_message"`
-	CreatedAt        time.Time `json:"created_at"`
+	ID               string          `json:"id"`
+	ConversationID   string          `json:"conversation_id"`
+	Role             string          `json:"role"`
+	Content          string          `json:"content"`
+	ReasoningContent string          `json:"reasoning_content"`
+	ToolCalls        []ToolCallEvent `json:"tool_calls,omitempty"`
+	Status           string          `json:"status"`
+	ErrorMessage     string          `json:"error_message"`
+	CreatedAt        time.Time       `json:"created_at"`
 }
 
 type ListMessagesResponse struct {

@@ -14,24 +14,31 @@ import (
 )
 
 type MessageHandler struct {
-	messageService *service.MessageService
-	runtimeManager *stream.Manager
+	messageService  *service.MessageService
+	toolCallService *service.ToolCallService
+	runtimeManager  *stream.Manager
 }
 
-func NewMessageHandler(messageService *service.MessageService, runtimeManager *stream.Manager) *MessageHandler {
+func NewMessageHandler(
+	messageService *service.MessageService,
+	toolCallService *service.ToolCallService,
+	runtimeManager *stream.Manager,
+) *MessageHandler {
 	return &MessageHandler{
-		messageService: messageService,
-		runtimeManager: runtimeManager,
+		messageService:  messageService,
+		toolCallService: toolCallService,
+		runtimeManager:  runtimeManager,
 	}
 }
 
-func newMessageResponse(message *entity.Message) model.MessageResponse {
+func newMessageResponse(message *entity.Message, toolCalls []model.ToolCallEvent) model.MessageResponse {
 	return model.MessageResponse{
 		ID:               message.ID,
 		ConversationID:   message.ConversationID,
 		Role:             message.Role,
 		Content:          message.Content,
 		ReasoningContent: message.ReasoningContent,
+		ToolCalls:        toolCalls,
 		Status:           message.Status,
 		ErrorMessage:     message.ErrorMessage,
 		CreatedAt:        message.CreatedAt,
@@ -85,9 +92,24 @@ func (h *MessageHandler) ListByConversationID(c *gin.Context) {
 		return
 	}
 
+	assistantMessageIDs := make([]string, 0)
+	for i := range result.Messages {
+		if result.Messages[i].Role == entity.MessageRoleAssistant {
+			assistantMessageIDs = append(assistantMessageIDs, result.Messages[i].ID)
+		}
+	}
+
+	toolCalls, err := h.toolCallService.ListByAssistantMessageIDs(c.Request.Context(), assistantMessageIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: "internal server error"})
+		return
+	}
+	toolCallsByMessageID := groupToolCallEventsByMessageID(toolCalls)
+
 	items := make([]model.MessageResponse, len(result.Messages))
 	for i := range result.Messages {
-		items[i] = newMessageResponse(&result.Messages[i])
+		message := &result.Messages[i]
+		items[i] = newMessageResponse(message, toolCallsByMessageID[message.ID])
 	}
 
 	c.JSON(http.StatusOK, model.ListMessagesResponse{
@@ -152,7 +174,7 @@ func (h *MessageHandler) Create(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, newMessageResponse(message))
+	c.JSON(http.StatusCreated, newMessageResponse(message, nil))
 }
 
 func (h *MessageHandler) GetByIDAndConversationID(c *gin.Context) {
@@ -189,7 +211,18 @@ func (h *MessageHandler) GetByIDAndConversationID(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, newMessageResponse(message))
+	var toolCalls []model.ToolCallEvent
+	if message.Role == entity.MessageRoleAssistant {
+		records, err := h.toolCallService.ListByAssistantMessageID(c.Request.Context(), message.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: "internal server error"})
+			return
+		}
+
+		toolCalls = groupToolCallEventsByMessageID(records)[message.ID]
+	}
+
+	c.JSON(http.StatusOK, newMessageResponse(message, toolCalls))
 }
 
 func (h *MessageHandler) UpdateContentByIDAndConversationID(c *gin.Context) {
@@ -232,7 +265,7 @@ func (h *MessageHandler) UpdateContentByIDAndConversationID(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, newMessageResponse(message))
+	c.JSON(http.StatusOK, newMessageResponse(message, nil))
 }
 
 func (h *MessageHandler) DeleteByIDAndConversationID(c *gin.Context) {
@@ -273,4 +306,26 @@ func (h *MessageHandler) DeleteByIDAndConversationID(c *gin.Context) {
 		task.Cancel("message deleted by user")
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// 将工具调用记录按 assistant_message_id 分组
+func groupToolCallEventsByMessageID(toolCalls []entity.ToolCall) map[string][]model.ToolCallEvent {
+	result := make(map[string][]model.ToolCallEvent)
+
+	for _, call := range toolCalls {
+		item := model.ToolCallEvent{
+			ID:           call.ID,
+			ProviderID:   call.ProviderCallID,
+			Name:         call.ToolName,
+			Arguments:    call.ArgumentsJSON,
+			Result:       call.ResultJSON,
+			Status:       call.Status,
+			ErrorMessage: call.ErrorMessage,
+			Round:        call.Round,
+			Seq:          call.Seq,
+		}
+		result[call.AssistantMessageID] = append(result[call.AssistantMessageID], item)
+	}
+
+	return result
 }

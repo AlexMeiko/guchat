@@ -1,10 +1,12 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -15,9 +17,29 @@ type Config struct {
 	JWTSecret               string
 	JWTAccessTTL            int64
 	JWTRefreshTTL           int64
+	GenerationContextLimit  int
+	GenerationMaxToolRounds int
 	GenerationRetryInterval int64
 	GenerationRetryMax      int64
+	TavilyAPIKey            string
+	TavilyBaseURL           string
+
+	MCPServers []MCPServerConfig
 }
+
+type MCPServerConfig struct {
+	Name      string   `json:"name"`
+	URL       string   `json:"url"`
+	AuthType  string   `json:"auth_type"`
+	AuthField string   `json:"auth_field"`
+	AuthKey   string   `json:"auth_key"`
+	Transport string   `json:"transport"`
+	Command   string   `json:"command"`
+	Args      []string `json:"args"`
+	Env       []string `json:"env"`
+}
+
+const defaultTavilyBaseURL = "https://api.tavily.com"
 
 func Load() (Config, error) {
 	_ = godotenv.Load()
@@ -32,14 +54,25 @@ func Load() (Config, error) {
 		return Config{}, errors.New("DATABASE_URL is required")
 	}
 
+	mcpServers, err := loadMCPServers()
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		Port:                    getEnv("PORT", "8080"),
 		DatabaseURL:             databaseURL,
 		JWTSecret:               jwtSecret,
 		JWTAccessTTL:            getEnvInt64("JWT_ACCESS_TTL_SECONDS", 3600),
 		JWTRefreshTTL:           getEnvInt64("JWT_REFRESH_TTL_SECONDS", 2592000),
+		GenerationContextLimit:  max(int(getEnvInt64("GENERATION_CONTEXT_LIMIT", 25)), 1),
+		GenerationMaxToolRounds: max(int(getEnvInt64("GENERATION_MAX_TOOL_ROUNDS", 12)), 1),
 		GenerationRetryInterval: max(getEnvInt64("GENERATION_RETRY_INTERVAL_SECONDS", 30), 1),
 		GenerationRetryMax:      max(getEnvInt64("GENERATION_RETRY_MAX", 5), 1),
+		TavilyAPIKey:            strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
+		TavilyBaseURL:           strings.TrimRight(strings.TrimSpace(getEnv("TAVILY_BASE_URL", defaultTavilyBaseURL)), "/"),
+
+		MCPServers: mcpServers,
 	}, nil
 }
 
@@ -69,4 +102,54 @@ func getEnvInt64(key string, fallback int64) int64 {
 	}
 
 	return parsed
+}
+
+func loadMCPServers() ([]MCPServerConfig, error) {
+	raw := strings.TrimSpace(os.Getenv("MCP_SERVERS"))
+	if raw == "" {
+		return nil, nil
+	}
+
+	var servers []MCPServerConfig
+	if err := json.Unmarshal([]byte(raw), &servers); err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]struct{}, len(servers))
+	for i := range servers {
+		servers[i].Name = strings.TrimSpace(servers[i].Name)
+		servers[i].URL = strings.TrimRight(strings.TrimSpace(servers[i].URL), "/")
+		servers[i].AuthType = strings.TrimSpace(servers[i].AuthType)
+		servers[i].AuthField = strings.TrimSpace(servers[i].AuthField)
+		servers[i].AuthKey = strings.TrimSpace(servers[i].AuthKey)
+		servers[i].Transport = strings.TrimSpace(servers[i].Transport)
+		servers[i].Command = strings.TrimSpace(servers[i].Command)
+
+		if servers[i].Name == "" {
+			return nil, errors.New("MCP_SERVERS server name is required")
+		}
+		if _, ok := seen[servers[i].Name]; ok {
+			return nil, errors.New("MCP_SERVERS contains duplicate name")
+		}
+		seen[servers[i].Name] = struct{}{}
+
+		switch servers[i].Transport {
+		case "http":
+			if servers[i].URL == "" {
+				return nil, errors.New("MCP_SERVERS http server url is required")
+			}
+		case "stdio":
+			if servers[i].Command == "" {
+				return nil, errors.New("MCP_SERVERS stdio server command is required")
+			}
+		default:
+			return nil, errors.New("MCP_SERVERS contains unsupported transport")
+		}
+
+		if servers[i].AuthType == "" {
+			servers[i].AuthType = "none"
+		}
+	}
+
+	return servers, nil
 }

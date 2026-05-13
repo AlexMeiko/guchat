@@ -9,14 +9,23 @@ import (
 
 var ErrUnsupportedModelProvider = errors.New("unsupported model provider")
 
+type GenerateMessage struct {
+	ID            string
+	Role          string
+	Content       string
+	ToolExchanges []ToolExchange
+}
+
 type GenerateInput struct {
 	Model    *entity.ModelConfig
-	Messages []entity.Message
+	Messages []GenerateMessage
+	Tools    []ToolDefinition
 }
 
 type GenerateCallbacks struct {
-	ContentDelta   func(string)
-	ReasoningDelta func(string)
+	ContentDelta    func(string)
+	ReasoningDelta  func(string)
+	ToolCallCreated func(ToolCall)
 }
 
 type Generator interface {
