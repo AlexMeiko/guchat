@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -196,7 +198,7 @@ func (p *MCPProvider) sendInitializedNotification(ctx context.Context) error {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewBuffer(payload))
 	if err != nil {
-		return err
+		return hideMCPURL(err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -211,13 +213,13 @@ func (p *MCPProvider) sendInitializedNotification(ctx context.Context) error {
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return err
+		return hideMCPURL(err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("mcp initialized notification error: status %d: %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("mcp initialized notification error: status %d: %s", resp.StatusCode, p.hideSensitiveText(string(respBody)))
 	}
 
 	return nil
@@ -266,7 +268,7 @@ func (p *MCPProvider) rpcRaw(ctx context.Context, method string, params any, wit
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewBuffer(payload))
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, hideMCPURL(err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -281,7 +283,7 @@ func (p *MCPProvider) rpcRaw(ctx context.Context, method string, params any, wit
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, hideMCPURL(err)
 	}
 	defer resp.Body.Close()
 
@@ -291,7 +293,7 @@ func (p *MCPProvider) rpcRaw(ctx context.Context, method string, params any, wit
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, resp.Header, resp.StatusCode, fmt.Errorf("mcp rpc error: status %d: %s", resp.StatusCode, string(respBody))
+		return nil, resp.Header, resp.StatusCode, fmt.Errorf("mcp rpc error: status %d: %s", resp.StatusCode, p.hideSensitiveText(string(respBody)))
 	}
 
 	var parsed struct {
@@ -312,7 +314,7 @@ func (p *MCPProvider) rpcRaw(ctx context.Context, method string, params any, wit
 	}
 
 	if parsed.Error != nil {
-		return nil, resp.Header, resp.StatusCode, fmt.Errorf("mcp rpc error: status %d: %s", parsed.Error.Code, parsed.Error.Message)
+		return nil, resp.Header, resp.StatusCode, fmt.Errorf("mcp rpc error: status %d: %s", parsed.Error.Code, p.hideSensitiveText(parsed.Error.Message))
 	}
 
 	if len(parsed.Result) == 0 {
@@ -334,6 +336,7 @@ func decodeMCPRPCPayload(resp *http.Response, body []byte) ([]byte, error) {
 	}
 
 	scanner := bufio.NewScanner(strings.NewReader(string(body)))
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	dataLines := make([]string, 0, 4)
 
 	for scanner.Scan() {
@@ -353,4 +356,22 @@ func decodeMCPRPCPayload(resp *http.Response, body []byte) ([]byte, error) {
 	}
 
 	return []byte(strings.Join(dataLines, "\n")), nil
+}
+
+func hideMCPURL(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Err
+	}
+	return err
+}
+
+func (p *MCPProvider) hideSensitiveText(text string) string {
+	if p.authKey == "" {
+		return text
+	}
+
+	text = strings.ReplaceAll(text, p.authKey, "<redacted>")
+	text = strings.ReplaceAll(text, url.QueryEscape(p.authKey), "<redacted>")
+	return text
 }
