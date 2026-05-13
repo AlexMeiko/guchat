@@ -10,6 +10,7 @@
 - 支持 SSE 实时推送正文增量、推理增量和生成状态
 - 支持 OpenAI Chat Completions、Responses API 和本地 `fake` 生成器
 - 支持模型配置管理，可动态启用或停用模型
+- 支持内置工具调用和 MCP 工具扩展，MCP 可通过 HTTP 或 stdio 接入
 - 采用 Handler / Service / Repository 分层结构，便于维护和扩展
 
 ## 技术栈
@@ -37,7 +38,8 @@
 │   ├── repository             # 数据访问层
 │   ├── router                 # 路由注册
 │   ├── service                # 业务逻辑层
-│   └── stream                 # SSE 运行时管理
+│   ├── stream                 # SSE 运行时管理
+│   └── tool                   # 内置工具与 MCP 工具接入
 ├── sql
 │   └── schema.sql             # MySQL 表结构
 ├── docs
@@ -102,6 +104,9 @@ JWT_ACCESS_TTL_SECONDS=3600
 JWT_REFRESH_TTL_SECONDS=2592000
 GENERATION_RETRY_INTERVAL_SECONDS=30
 GENERATION_RETRY_MAX=5
+TAVILY_API_KEY=
+TAVILY_BASE_URL=https://api.tavily.com
+MCP_SERVERS=
 ```
 
 `DATABASE_URL` 支持 `mysql://user:password@host:port/dbname` 格式，也支持 go-sql-driver/mysql 的原生 DSN 格式。
@@ -182,6 +187,39 @@ curl -X POST "http://localhost:8080/api/admin/models" \
 ```
 
 `extra_body` 会合并进上游模型请求体，但不能覆盖项目保留字段，例如 `model`、`messages`、`input`、`stream` 等。具体规则见 `docs/api.md`。
+
+## 工具与 MCP 配置
+
+当前内置工具包括：
+
+- `get_current_time`：获取指定 IANA 时区的当前时间
+- `read_web_page`：读取公开网页正文
+- `tavily_search`：配置 `TAVILY_API_KEY` 后启用 Tavily 搜索
+
+外部 MCP 服务通过环境变量 `MCP_SERVERS` 配置。它是一个 JSON 数组，每个元素表示一个 MCP 服务；`name` 会作为工具名前缀，例如 MCP 服务返回 `tavily_extract` 时，最终暴露为 `tavily.tavily_extract`。
+
+HTTP MCP 示例：
+
+```env
+MCP_SERVERS=[{"name":"tavily","transport":"http","url":"https://mcp.tavily.com/mcp/","auth_type":"query","auth_field":"tavilyApiKey","auth_key":"your-api-key"}]
+```
+
+stdio MCP 示例：
+
+```env
+MCP_SERVERS=[{"name":"github","transport":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-github"],"env":["GITHUB_PERSONAL_ACCESS_TOKEN=your-token"]}]
+```
+
+字段说明：
+
+- `transport`：支持 `http`、`stdio`
+- `url`：HTTP MCP endpoint，`transport=http` 时必填
+- `auth_type`：HTTP 认证方式，支持 `none`、`query`、`header`
+- `auth_field` / `auth_key`：HTTP 认证字段名和密钥
+- `command` / `args`：stdio MCP 启动命令和参数，`transport=stdio` 时 `command` 必填
+- `env`：传给 stdio MCP 子进程的环境变量，格式为 `KEY=value`
+
+如果 `.env` 中需要把 `MCP_SERVERS` 写成多行 JSON，请用引号包住完整值。
 
 ## SSE 事件
 

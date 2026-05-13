@@ -13,7 +13,8 @@
 - [5. 详细接口](#5-详细接口)
 - [6. SSE 事件格式](#6-sse-事件格式)
 - [7. 已知边界行为](#7-已知边界行为)
-- [8. 联调示例](#8-联调示例)
+- [8. 工具调用](#8-工具调用)
+- [9. 联调示例](#9-联调示例)
 
 ---
 
@@ -29,6 +30,7 @@
 | 消息角色 | `system`、`user`、`assistant` |
 | 消息状态 | `pending`、`streaming`、`done`、`failed` |
 | 模型 provider | `openai`、`openai_responses`、`fake` |
+| 工具模式 | `auto`、`none` |
 
 ---
 
@@ -402,6 +404,11 @@ Authorization: Bearer <access_token>
 
 ### 5.4 消息
 
+说明：
+
+- 消息响应中的 assistant 消息可能包含 `tool_calls` 字段
+- `tool_calls` 字段结构同 SSE 中的 `tool_call.created` / `tool_call.updated` 事件数据
+
 #### `GET /api/conversations/:conversation_id/messages`
 
 查询参数：
@@ -590,6 +597,9 @@ Authorization: Bearer <access_token>
 - `context_limit` 为可选字段，表示本次生成最多携带多少条最近的非 `system` 消息
 - 所有 `system` 消息都会始终保留，不计入 `context_limit`
 - 不传 `context_limit` 时，当前实现默认使用 `25`
+- `tool_mode` 为可选字段，支持 `auto`、`none`；不传时默认为 `auto`
+- `tool_mode=auto` 时，生成器可使用内置工具和已配置的 MCP 工具
+- `tool_mode=none` 时，本次生成不向模型提供工具
 - 上下文裁剪范围截至源消息本身
 
 请求体：
@@ -597,7 +607,8 @@ Authorization: Bearer <access_token>
 ```json
 {
   "model_id": 1,
-  "context_limit": 25
+  "context_limit": 25,
+  "tool_mode": "auto"
 }
 ```
 
@@ -622,6 +633,7 @@ Authorization: Bearer <access_token>
 - `400 invalid message id`
 - `400 invalid request body`
 - `400 invalid context limit`
+- `400 invalid tool mode`
 - `404 conversation not found`
 - `404 message not found`
 - `404 model not found`
@@ -881,6 +893,8 @@ data: <json>
 - `message.snapshot`
 - `message.delta`
 - `message.reasoning_delta`
+- `tool_call.created`
+- `tool_call.updated`
 - `message.completed`
 - `message.failed`
 
@@ -894,6 +908,17 @@ data: <json>
   "status": "streaming",
   "content": "当前完整内容",
   "reasoning_content": "当前完整推理内容",
+  "tool_calls": [
+    {
+      "id": 1,
+      "provider_id": "call_xxx",
+      "name": "tavily.tavily_extract",
+      "arguments": "{\"url\":\"https://example.com\"}",
+      "status": "running",
+      "round": 1,
+      "seq": 1
+    }
+  ],
   "error": ""
 }
 ```
@@ -903,6 +928,7 @@ data: <json>
 - 建立连接后总会先收到一条 `message.snapshot`
 - 如果对应 runtime task 不存在，接口只会返回这一条 `snapshot`，然后结束连接
 - 如果消息在连接建立时已经是 `done` 或 `failed`，也只会返回这一条 `snapshot`，然后结束连接
+- `tool_calls` 仅在该 assistant 消息已有工具调用记录时返回
 
 ### 6.2 `message.delta`
 
@@ -948,7 +974,54 @@ data: <json>
 }
 ```
 
-### 6.5 `message.failed`
+### 6.5 `tool_call.created`
+
+示例：
+
+```json
+{
+  "id": 1,
+  "provider_id": "call_xxx",
+  "name": "tavily.tavily_extract",
+  "arguments": "{\"url\":\"https://example.com\"}",
+  "status": "pending",
+  "round": 1,
+  "seq": 1
+}
+```
+
+说明：
+
+- 表示模型请求了一次工具调用
+- `provider_id` 是模型侧工具调用 ID
+- `arguments` 是模型传入工具的原始 JSON 字符串
+- `round` 表示当前工具调用轮次，`seq` 表示该轮内的顺序
+
+### 6.6 `tool_call.updated`
+
+示例：
+
+```json
+{
+  "id": 1,
+  "provider_id": "call_xxx",
+  "name": "tavily.tavily_extract",
+  "arguments": "{\"url\":\"https://example.com\"}",
+  "result": "{\"content\":\"...\"}",
+  "status": "done",
+  "round": 1,
+  "seq": 1
+}
+```
+
+说明：
+
+- 表示工具调用状态或结果发生变化
+- `status` 可能为 `running`、`done`、`failed`
+- `result` 是工具调用结果的 JSON 字符串，仅在有结果时返回
+- `error_message` 仅在工具调用失败时返回
+
+### 6.7 `message.failed`
 
 示例：
 
@@ -969,12 +1042,29 @@ data: <json>
 - 删除生成中的消息后，数据库记录会被删除，后续 `GET /messages/:id` 应返回 `404`
 - 删除后，如果已有 SSE 连接仍处于极小的并发窗口，当前实现下它仍可能观察到 terminal 事件；业务状态应以数据库查询结果为准
 - 在极小的时序窗口里，`message.completed` 可能略早于数据库最终 `done` 状态可见
+- stdio MCP 工具调用开始后，当前实现会等待该工具调用返回
 
 ---
 
-## 8. 联调示例
+## 8. 工具调用
 
-### 8.1 登录
+工具调用由生成接口控制。`POST /api/conversations/:conversation_id/messages/:message_id/generation` 的 `tool_mode` 为 `auto` 时，后端会向模型提供当前可用工具；`tool_mode` 为 `none` 时，本次生成不提供工具。
+
+当前内置工具：
+
+| 工具名 | 启用条件 | 说明 |
+| --- | --- | --- |
+| `get_current_time` | 默认启用 | 获取指定 IANA 时区的当前时间 |
+| `read_web_page` | 默认启用 | 读取公开网页正文 |
+| `tavily_search` | 配置 `TAVILY_API_KEY` | 使用 Tavily 搜索互联网信息 |
+
+外部 MCP 工具由服务端配置决定。MCP 工具暴露给模型时会自动加上服务名前缀，例如服务名为 `tavily` 且远端工具名为 `tavily_extract` 时，模型侧工具名为 `tavily.tavily_extract`。
+
+---
+
+## 9. 联调示例
+
+### 9.1 登录
 
 ```bash
 curl -X POST http://localhost:8080/api/auth/login \
@@ -982,14 +1072,14 @@ curl -X POST http://localhost:8080/api/auth/login \
   -d '{"username":"alex","password":"123456"}'
 ```
 
-### 8.2 获取会话列表
+### 9.2 获取会话列表
 
 ```bash
 curl http://localhost:8080/api/conversations \
   -H "Authorization: Bearer <access_token>"
 ```
 
-### 8.3 分页获取消息
+### 9.3 分页获取消息
 
 获取最新 20 条消息：
 
@@ -1005,7 +1095,7 @@ curl "http://localhost:8080/api/conversations/<conversation_id>/messages?before_
   -H "Authorization: Bearer <access_token>"
 ```
 
-### 8.4 创建用户消息
+### 9.4 创建用户消息
 
 ```bash
 curl -X POST "http://localhost:8080/api/conversations/<conversation_id>/messages" \
@@ -1014,16 +1104,16 @@ curl -X POST "http://localhost:8080/api/conversations/<conversation_id>/messages
   -d '{"content":"你好"}'
 ```
 
-### 8.5 触发生成
+### 9.5 触发生成
 
 ```bash
 curl -X POST "http://localhost:8080/api/conversations/<conversation_id>/messages/<message_id>/generation" \
   -H "Authorization: Bearer <access_token>" \
   -H "Content-Type: application/json" \
-  -d '{"model_id":1,"context_limit":25}'
+  -d '{"model_id":1,"context_limit":25,"tool_mode":"auto"}'
 ```
 
-### 8.6 创建模型
+### 9.6 创建模型
 
 ```bash
 curl -X POST "http://localhost:8080/api/admin/models" \
@@ -1040,7 +1130,7 @@ curl -X POST "http://localhost:8080/api/admin/models" \
   }'
 ```
 
-### 8.7 订阅 SSE
+### 9.7 订阅 SSE
 
 ```bash
 curl -N "http://localhost:8080/api/conversations/<conversation_id>/messages/<assistant_message_id>/events" \
