@@ -224,12 +224,20 @@ func buildOpenAIChatCompletionMessages(
 			continue
 		}
 
+		if message.Role == entity.MessageRoleAssistant && len(message.GenerationRounds) > 0 {
+			result = appendOpenAIChatAssistantMessageWithRounds(result, message)
+			continue
+		}
+
 		if message.Role == entity.MessageRoleAssistant && len(message.ToolExchanges) > 0 {
-			result = appendOpenAIChatAssistantMessageWithTools(result, message)
+			result = appendOpenAIChatAssistantMessageWithLegacyTools(result, message)
 			continue
 		}
 
 		content := strings.TrimSpace(message.Content)
+		if message.Role == entity.MessageRoleAssistant {
+			content = strings.TrimSpace(toolCallTagRe.ReplaceAllString(content, ""))
+		}
 		if content == "" {
 			continue
 		}
@@ -242,88 +250,6 @@ func buildOpenAIChatCompletionMessages(
 			item.ReasoningContent = strings.TrimSpace(message.ReasoningContent)
 		}
 		result = append(result, item)
-	}
-
-	return result
-}
-
-func appendOpenAIChatAssistantMessageWithTools(
-	result []openAIChatCompletionMessage,
-	message service.GenerateMessage,
-) []openAIChatCompletionMessage {
-	exchanges := make(map[string]service.ToolExchange, len(message.ToolExchanges))
-	for _, exchange := range message.ToolExchanges {
-		exchanges[exchange.Call.ID] = exchange
-	}
-
-	content := message.Content
-	reasoningContent := message.ReasoningContent
-	matches := toolCallTagRe.FindAllStringSubmatchIndex(content, -1)
-
-	var batch []service.ToolExchange
-	batchContent := ""
-	batchRound := 0
-
-	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-
-		result = append(result, newOpenAIChatToolCallMessage(batchContent, batch, reasoningContent))
-		//reasoningContent = ""
-
-		for _, exchange := range batch {
-			result = append(result, openAIChatCompletionMessage{
-				Role:       "tool",
-				ToolCallID: exchange.Call.ID,
-				Content:    string(exchange.Result.Result),
-			})
-		}
-
-		batch = nil
-		batchContent = ""
-		batchRound = 0
-	}
-
-	last := 0
-	for _, match := range matches {
-		//fullStart/fullEnd 整个 <!--tool_call:call_a--> 的位置
-		//idStart/idEnd     call_a 的位置
-		fullStart := match[0]
-		fullEnd := match[1]
-		idStart := match[2]
-		idEnd := match[3]
-
-		text := strings.TrimSpace(content[last:fullStart])
-
-		toolCallID := content[idStart:idEnd]
-		exchange, ok := exchanges[toolCallID]
-		if !ok {
-			last = fullEnd
-			continue
-		}
-
-		if len(batch) == 0 {
-			batchRound = exchange.Round
-			batchContent = text
-		} else if exchange.Round != batchRound {
-			flush()
-			batchRound = exchange.Round
-			batchContent = text
-		}
-
-		batch = append(batch, exchange)
-		last = fullEnd
-	}
-
-	flush()
-
-	text := strings.TrimSpace(content[last:])
-	if text != "" {
-		result = append(result, openAIChatCompletionMessage{
-			Role:    entity.MessageRoleAssistant,
-			Content: text,
-		})
 	}
 
 	return result
@@ -456,4 +382,86 @@ func decodeOpenAIError(resp *http.Response) error {
 	}
 
 	return fmt.Errorf("openai api error: status %d: %s", resp.StatusCode, text)
+}
+
+func sliceByOffset(content string, start, end int) string {
+	if start < 0 || end < start || start > len(content) {
+		return ""
+	}
+
+	end = min(end, len(content))
+
+	return strings.TrimSpace(content[start:end])
+}
+
+func groupToolExchangesByRound(exchanges []service.ToolExchange) map[int][]service.ToolExchange {
+	result := map[int][]service.ToolExchange{}
+
+	for _, exchange := range exchanges {
+		result[exchange.Round] = append(result[exchange.Round], exchange)
+	}
+
+	return result
+}
+
+func appendOpenAIChatAssistantMessageWithRounds(
+	result []openAIChatCompletionMessage,
+	message service.GenerateMessage,
+) []openAIChatCompletionMessage {
+	exchangesByRound := groupToolExchangesByRound(message.ToolExchanges)
+
+	for _, round := range message.GenerationRounds {
+		content := sliceByOffset(message.Content, round.ContentStartOffset, round.ContentEndOffset)
+		reasoningContent := sliceByOffset(message.ReasoningContent, round.ReasoningStartOffset, round.ReasoningEndOffset)
+		exchanges := exchangesByRound[round.Round]
+
+		if len(exchanges) > 0 {
+			result = append(result, newOpenAIChatToolCallMessage(content, exchanges, reasoningContent))
+
+			for _, exchange := range exchanges {
+				result = append(result, openAIChatCompletionMessage{
+					Role:       "tool",
+					ToolCallID: exchange.Call.ID,
+					Content:    string(exchange.Result.Result),
+				})
+			}
+			continue
+		}
+
+		if content != "" {
+			item := openAIChatCompletionMessage{
+				Role:    entity.MessageRoleAssistant,
+				Content: content,
+			}
+			if reasoningContent != "" {
+				item.ReasoningContent = reasoningContent
+			}
+			result = append(result, item)
+		}
+	}
+
+	return result
+}
+
+func appendOpenAIChatAssistantMessageWithLegacyTools(
+	result []openAIChatCompletionMessage,
+	message service.GenerateMessage,
+) []openAIChatCompletionMessage {
+	content := strings.TrimSpace(toolCallTagRe.ReplaceAllString(message.Content, ""))
+
+	result = append(result, newOpenAIChatToolCallMessage(
+		content,
+		message.ToolExchanges,
+		message.ReasoningContent,
+	))
+
+	for _, exchange := range message.ToolExchanges {
+		result = append(result, openAIChatCompletionMessage{
+			Role:       "tool",
+			ToolCallID: exchange.Call.ID,
+			Content:    string(exchange.Result.Result),
+		})
+	}
+
+	return result
 }

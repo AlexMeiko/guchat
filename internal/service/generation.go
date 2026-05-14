@@ -45,6 +45,7 @@ type GenerationService struct {
 	runtimeManager      *stream.Manager
 	toolProviderManager *ToolProviderManager
 	toolCallRepo        *repository.ToolCallRepository
+	generationRoundRepo *repository.GenerationRoundRepository
 	defaultContextLimit int
 	maxToolRounds       int
 	retryInterval       time.Duration
@@ -66,6 +67,7 @@ func NewGenerationService(
 	runtimeManager *stream.Manager,
 	toolProviderManager *ToolProviderManager,
 	toolCallRepo *repository.ToolCallRepository,
+	generationRoundRepo *repository.GenerationRoundRepository,
 	defaultContextLimit int,
 	maxToolRounds int,
 	retryInterval time.Duration,
@@ -78,6 +80,7 @@ func NewGenerationService(
 		runtimeManager:      runtimeManager,
 		toolProviderManager: toolProviderManager,
 		toolCallRepo:        toolCallRepo,
+		generationRoundRepo: generationRoundRepo,
 		defaultContextLimit: defaultContextLimit,
 		maxToolRounds:       maxToolRounds,
 		retryInterval:       retryInterval,
@@ -234,10 +237,17 @@ func (s *GenerationService) Process(
 		return fail(err)
 	}
 
+	roundRecords, err := s.generationRoundRepo.ListByAssistantMessageIDs(ctx, assistantMessageIDs)
+	if err != nil {
+		return fail(err)
+	}
+
 	toolExchangesByMessageID := groupToolExchangesByMessageID(toolCallRecords)
+	generationRoundsByMessageID := groupGenerationRoundsByMessageID(roundRecords)
 
 	for i := range generateMessages {
 		generateMessages[i].ToolExchanges = toolExchangesByMessageID[generateMessages[i].ID]
+		generateMessages[i].GenerationRounds = generationRoundsByMessageID[generateMessages[i].ID]
 	}
 
 	generator, err := s.generatorFactory.Get(modelConfig)
@@ -278,6 +288,9 @@ func (s *GenerationService) Process(
 		roundMessages = append(roundMessages, generateMessages...)
 
 		snapshot := task.Snapshot()
+		contentStartOffset := len(snapshot.Content)
+		reasoningStartOffset := len(snapshot.ReasoningContent)
+
 		if snapshot.Content != "" || len(toolExchanges) > 0 {
 			roundMessages = append(roundMessages, GenerateMessage{
 				ID:               assistantMessageID,
@@ -301,6 +314,24 @@ func (s *GenerationService) Process(
 		})
 		if err != nil {
 			return fail(err)
+		}
+
+		snapshot = task.Snapshot()
+		contentEndOffset := len(snapshot.Content)
+		reasoningEndOffset := len(snapshot.ReasoningContent)
+
+		if contentEndOffset > contentStartOffset || reasoningEndOffset > reasoningStartOffset || len(calls) > 0 {
+			if err := s.generationRoundRepo.Create(ctx, &entity.GenerationRound{
+				ConversationID:       conversationID,
+				AssistantMessageID:   assistantMessageID,
+				Round:                round,
+				ContentStartOffset:   contentStartOffset,
+				ContentEndOffset:     contentEndOffset,
+				ReasoningStartOffset: reasoningStartOffset,
+				ReasoningEndOffset:   reasoningEndOffset,
+			}); err != nil {
+				return fail(err)
+			}
 		}
 
 		if len(calls) == 0 {
@@ -533,6 +564,22 @@ func groupToolExchangesByMessageID(records []entity.ToolCall) map[string][]ToolE
 				Name:       record.ToolName,
 				Result:     json.RawMessage(record.ResultJSON),
 			},
+		})
+	}
+
+	return result
+}
+
+func groupGenerationRoundsByMessageID(records []entity.GenerationRound) map[string][]GenerationRound {
+	result := make(map[string][]GenerationRound)
+
+	for _, record := range records {
+		result[record.AssistantMessageID] = append(result[record.AssistantMessageID], GenerationRound{
+			Round:                record.Round,
+			ContentStartOffset:   record.ContentStartOffset,
+			ContentEndOffset:     record.ContentEndOffset,
+			ReasoningStartOffset: record.ReasoningStartOffset,
+			ReasoningEndOffset:   record.ReasoningEndOffset,
 		})
 	}
 

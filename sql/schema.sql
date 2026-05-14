@@ -95,3 +95,26 @@ CREATE TABLE tool_calls
         FOREIGN KEY (assistant_message_id) REFERENCES messages (id)
             ON DELETE CASCADE
 ) ENGINE = InnoDB;
+
+CREATE TABLE generation_rounds
+(
+    id                       BIGINT PRIMARY KEY AUTO_INCREMENT,
+    conversation_id          CHAR(36)     NOT NULL,
+    assistant_message_id     CHAR(36)     NOT NULL,
+    round                    INT          NOT NULL,
+    content_start_offset     INT          NOT NULL DEFAULT 0,
+    content_end_offset       INT          NOT NULL DEFAULT 0,
+    reasoning_start_offset   INT          NOT NULL DEFAULT 0,
+    reasoning_end_offset     INT          NOT NULL DEFAULT 0,
+    created_at               TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+
+    UNIQUE KEY uk_generation_rounds_message_round (assistant_message_id, round),
+    KEY idx_generation_rounds_conversation_id (conversation_id),
+
+    CONSTRAINT fk_generation_rounds_conversation_id
+        FOREIGN KEY (conversation_id) REFERENCES conversations (id)
+            ON DELETE CASCADE,
+    CONSTRAINT fk_generation_rounds_assistant_message_id
+        FOREIGN KEY (assistant_message_id) REFERENCES messages (id)
+            ON DELETE CASCADE
+) ENGINE = InnoDB;

@@ -15,6 +15,7 @@ type GenerateMessage struct {
 	Content          string
 	ReasoningContent string
 	ToolExchanges    []ToolExchange
+	GenerationRounds []GenerationRound
 }
 
 type GenerateInput struct {
@@ -27,6 +28,14 @@ type GenerateCallbacks struct {
 	ContentDelta    func(string)
 	ReasoningDelta  func(string)
 	ToolCallCreated func(ToolCall)
+}
+
+type GenerationRound struct {
+	Round                int
+	ContentStartOffset   int
+	ContentEndOffset     int
+	ReasoningStartOffset int
+	ReasoningEndOffset   int
 }
 
 type Generator interface {

@@ -57,6 +57,7 @@ func main() {
 
 	toolCallRepo := repository.NewToolCallRepository(mysqlDB)
 	toolCallService := service.NewToolCallService(toolCallRepo)
+	generationRoundRepo := repository.NewGenerationRoundRepository(mysqlDB)
 
 	toolProviders := []service.ToolProvider{
 		tool.NewBuiltinProvider(tool.BuiltinProviderConfig{
@@ -119,6 +120,7 @@ func main() {
 		runtimeManager,
 		toolProviderManager,
 		toolCallRepo,
+		generationRoundRepo,
 		cfg.GenerationContextLimit,
 		cfg.GenerationMaxToolRounds,
 		time.Duration(cfg.GenerationRetryInterval)*time.Second,
