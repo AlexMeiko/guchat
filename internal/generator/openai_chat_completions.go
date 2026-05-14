@@ -97,10 +97,11 @@ func (g *OpenAIChatCompletionsGenerator) Generate(ctx context.Context, input ser
 }
 
 type openAIChatCompletionMessage struct {
-	Role       string               `json:"role"`
-	Content    string               `json:"content,omitempty"`
-	ToolCallID string               `json:"tool_call_id,omitempty"`
-	ToolCalls  []openAIChatToolCall `json:"tool_calls,omitempty"`
+	Role             string               `json:"role"`
+	Content          string               `json:"content,omitempty"`
+	ReasoningContent string               `json:"reasoning_content,omitempty"`
+	ToolCallID       string               `json:"tool_call_id,omitempty"`
+	ToolCalls        []openAIChatToolCall `json:"tool_calls,omitempty"`
 }
 
 type openAIChatToolCall struct {
@@ -155,17 +156,24 @@ type openAIErrorResponse struct {
 }
 
 // 用于把模型返回的工具调用请求转换为符合的消息，在提交工具结果前，必须先把模型当时请求工具的 assistant tool_calls 消息放回上下文
-func newOpenAIChatToolCallMessage(call service.ToolCall) openAIChatCompletionMessage {
-	toolCall := openAIChatToolCall{
-		ID:   call.ID,
-		Type: "function",
+func newOpenAIChatToolCallMessage(content string, exchanges []service.ToolExchange, reasoningContent string) openAIChatCompletionMessage {
+	toolCalls := make([]openAIChatToolCall, 0, len(exchanges))
+	for _, ex := range exchanges {
+		toolCall := openAIChatToolCall{
+			ID:   ex.Call.ID,
+			Type: "function",
+		}
+		toolCall.Function.Name = ex.Call.Name
+		toolCall.Function.Arguments = string(ex.Call.Arguments)
+
+		toolCalls = append(toolCalls, toolCall)
 	}
-	toolCall.Function.Name = call.Name
-	toolCall.Function.Arguments = string(call.Arguments)
 
 	return openAIChatCompletionMessage{
-		Role:      entity.MessageRoleAssistant,
-		ToolCalls: []openAIChatToolCall{toolCall},
+		Role:             entity.MessageRoleAssistant,
+		Content:          strings.TrimSpace(content),
+		ReasoningContent: strings.TrimSpace(reasoningContent),
+		ToolCalls:        toolCalls,
 	}
 }
 
@@ -194,6 +202,7 @@ func buildOpenAIChatTools(tools []service.ToolDefinition) []openAIChatTool {
 		item.Function.Name = tool.Name
 		item.Function.Description = tool.Description
 		item.Function.Parameters = tool.Parameters
+
 		result = append(result, item)
 	}
 
@@ -201,7 +210,7 @@ func buildOpenAIChatTools(tools []service.ToolDefinition) []openAIChatTool {
 }
 
 // 用于将项目的历史消息和已完成工具交换记录转换为 Chat Completions messages，
-// 普通历史消息会变成 system/user/assistant 文本消息，每个 ToolExchange 会变成一条 assistant tool_calls 消息和一条 tool 结果消息。
+// 普通历史消息会变成 system/user/assistant 文本消息；工具历史会按轮次还原为 assistant tool_calls 消息和对应的 tool 结果消息。
 func buildOpenAIChatCompletionMessages(
 	messages []service.GenerateMessage,
 ) []openAIChatCompletionMessage {
@@ -225,10 +234,14 @@ func buildOpenAIChatCompletionMessages(
 			continue
 		}
 
-		result = append(result, openAIChatCompletionMessage{
+		item := openAIChatCompletionMessage{
 			Role:    message.Role,
 			Content: content,
-		})
+		}
+		if message.Role == entity.MessageRoleAssistant {
+			item.ReasoningContent = strings.TrimSpace(message.ReasoningContent)
+		}
+		result = append(result, item)
 	}
 
 	return result
@@ -242,8 +255,35 @@ func appendOpenAIChatAssistantMessageWithTools(
 	for _, exchange := range message.ToolExchanges {
 		exchanges[exchange.Call.ID] = exchange
 	}
+
 	content := message.Content
+	reasoningContent := message.ReasoningContent
 	matches := toolCallTagRe.FindAllStringSubmatchIndex(content, -1)
+
+	var batch []service.ToolExchange
+	batchContent := ""
+	batchRound := 0
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+
+		result = append(result, newOpenAIChatToolCallMessage(batchContent, batch, reasoningContent))
+		//reasoningContent = ""
+
+		for _, exchange := range batch {
+			result = append(result, openAIChatCompletionMessage{
+				Role:       "tool",
+				ToolCallID: exchange.Call.ID,
+				Content:    string(exchange.Result.Result),
+			})
+		}
+
+		batch = nil
+		batchContent = ""
+		batchRound = 0
+	}
 
 	last := 0
 	for _, match := range matches {
@@ -255,26 +295,28 @@ func appendOpenAIChatAssistantMessageWithTools(
 		idEnd := match[3]
 
 		text := strings.TrimSpace(content[last:fullStart])
-		if text != "" {
-			result = append(result, openAIChatCompletionMessage{
-				Role:    entity.MessageRoleAssistant,
-				Content: text,
-			})
-		}
 
 		toolCallID := content[idStart:idEnd]
 		exchange, ok := exchanges[toolCallID]
-		if ok {
-			result = append(result, newOpenAIChatToolCallMessage(exchange.Call))
-			result = append(result, openAIChatCompletionMessage{
-				Role:       "tool",
-				ToolCallID: exchange.Call.ID,
-				Content:    string(exchange.Result.Result),
-			})
+		if !ok {
+			last = fullEnd
+			continue
 		}
 
+		if len(batch) == 0 {
+			batchRound = exchange.Round
+			batchContent = text
+		} else if exchange.Round != batchRound {
+			flush()
+			batchRound = exchange.Round
+			batchContent = text
+		}
+
+		batch = append(batch, exchange)
 		last = fullEnd
 	}
+
+	flush()
 
 	text := strings.TrimSpace(content[last:])
 	if text != "" {

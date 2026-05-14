@@ -10,10 +10,11 @@ import (
 var ErrUnsupportedModelProvider = errors.New("unsupported model provider")
 
 type GenerateMessage struct {
-	ID            string
-	Role          string
-	Content       string
-	ToolExchanges []ToolExchange
+	ID               string
+	Role             string
+	Content          string
+	ReasoningContent string
+	ToolExchanges    []ToolExchange
 }
 
 type GenerateInput struct {

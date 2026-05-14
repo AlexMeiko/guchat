@@ -32,6 +32,8 @@ type ToolResult struct {
 }
 
 type ToolExchange struct {
+	Round  int        `json:"round"`
+	Seq    int        `json:"seq"`
 	Call   ToolCall   `json:"call"`
 	Result ToolResult `json:"result"`
 }

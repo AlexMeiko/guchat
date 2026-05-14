@@ -90,9 +90,10 @@ func newGenerateMessages(messages []entity.Message) []GenerateMessage {
 	result := make([]GenerateMessage, 0, len(messages))
 	for _, message := range messages {
 		result = append(result, GenerateMessage{
-			ID:      message.ID,
-			Role:    message.Role,
-			Content: message.Content,
+			ID:               message.ID,
+			Role:             message.Role,
+			Content:          message.Content,
+			ReasoningContent: message.ReasoningContent,
 		})
 	}
 	return result
@@ -279,10 +280,11 @@ func (s *GenerationService) Process(
 		snapshot := task.Snapshot()
 		if snapshot.Content != "" || len(toolExchanges) > 0 {
 			roundMessages = append(roundMessages, GenerateMessage{
-				ID:            assistantMessageID,
-				Role:          entity.MessageRoleAssistant,
-				Content:       snapshot.Content,
-				ToolExchanges: toolExchanges,
+				ID:               assistantMessageID,
+				Role:             entity.MessageRoleAssistant,
+				Content:          snapshot.Content,
+				ReasoningContent: snapshot.ReasoningContent,
+				ToolExchanges:    toolExchanges,
 			})
 		}
 
@@ -371,6 +373,8 @@ func (s *GenerationService) Process(
 				}
 
 				toolExchanges = append(toolExchanges, ToolExchange{
+					Round:  round,
+					Seq:    i + 1,
 					Call:   modelCall,
 					Result: toolResults,
 				})
@@ -392,6 +396,8 @@ func (s *GenerationService) Process(
 			task.UpdateToolCallDone(record.ID, string(toolResult.Result))
 
 			toolExchanges = append(toolExchanges, ToolExchange{
+				Round:  round,
+				Seq:    i + 1,
 				Call:   modelCall,
 				Result: toolResult,
 			})
@@ -515,6 +521,8 @@ func groupToolExchangesByMessageID(records []entity.ToolCall) map[string][]ToolE
 		}
 
 		result[record.AssistantMessageID] = append(result[record.AssistantMessageID], ToolExchange{
+			Round: record.Round,
+			Seq:   record.Seq,
 			Call: ToolCall{
 				ID:        record.ProviderCallID,
 				Name:      record.ToolName,
