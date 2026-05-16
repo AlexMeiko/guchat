@@ -4,41 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
-	"github.com/AlexMeiko/guchat/internal/entity"
 	"github.com/AlexMeiko/guchat/internal/service"
 )
 
 var errOpenAIStreamDone = errors.New("stream done")
 
-type openAIInputMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-func buildOpenAIInputMessages(messages []service.GenerateMessage) []openAIInputMessage {
-	result := make([]openAIInputMessage, 0, len(messages))
-
-	for _, message := range messages {
-		if message.Content == "" {
-			continue
-		}
-
-		switch message.Role {
-		case entity.MessageRoleSystem, entity.MessageRoleUser, entity.MessageRoleAssistant:
-		default:
-			continue
-		}
-
-		result = append(result, openAIInputMessage{
-			Role:    message.Role,
-			Content: message.Content,
-		})
-	}
-
-	return result
-}
+var toolCallTagRe = regexp.MustCompile(`<!--tool_call:([^>]+)-->`)
 
 func marshalOpenAIRequestBody(base any, extraBody string, reservedKeys ...string) ([]byte, error) {
 	basePayload, err := json.Marshal(base)
@@ -73,4 +47,24 @@ func marshalOpenAIRequestBody(base any, extraBody string, reservedKeys ...string
 	}
 
 	return json.Marshal(body)
+}
+
+func sliceByOffset(content string, start, end int) string {
+	if start < 0 || end < start || start > len(content) {
+		return ""
+	}
+
+	end = min(end, len(content))
+
+	return strings.TrimSpace(content[start:end])
+}
+
+func groupToolExchangesByRound(exchanges []service.ToolExchange) map[int][]service.ToolExchange {
+	result := map[int][]service.ToolExchange{}
+
+	for _, exchange := range exchanges {
+		result[exchange.Round] = append(result[exchange.Round], exchange)
+	}
+
+	return result
 }
