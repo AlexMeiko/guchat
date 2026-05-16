@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/AlexMeiko/guchat/internal/entity"
 	"github.com/AlexMeiko/guchat/internal/service"
 )
 
@@ -17,10 +18,29 @@ type OpenAIResponsesGenerator struct {
 	client *http.Client
 }
 
+type openAIResponsesMessage struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
+
+	Type      string `json:"type,omitempty"`
+	CallID    string `json:"call_id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+	Output    string `json:"output,omitempty"`
+}
+
+type openAIResponsesTool struct {
+	Type        string          `json:"type"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
 type openAIResponsesRequest struct {
-	Model  string               `json:"model"`
-	Input  []openAIInputMessage `json:"input"`
-	Stream bool                 `json:"stream"`
+	Model  string                   `json:"model"`
+	Input  []openAIResponsesMessage `json:"input"`
+	Tools  []json.RawMessage        `json:"tools,omitempty"`
+	Stream bool                     `json:"stream"`
 }
 
 func NewOpenAIResponsesGenerator(client *http.Client) *OpenAIResponsesGenerator {
@@ -48,17 +68,30 @@ func (g *OpenAIResponsesGenerator) Generate(ctx context.Context, input service.G
 		return errors.New("no prompt messages to send")
 	}
 
+	tools, err := buildOpenAIResponsesTools(input.Tools)
+	if err != nil {
+		return err
+	}
+
+	extraTools, extraBody, err := takeOpenAIResponsesExtraTools(input.Model.ExtraBody)
+	if err != nil {
+		return err
+	}
+	tools = append(tools, extraTools...)
+
 	reqBody := openAIResponsesRequest{
 		Model:  input.Model.ModelKey,
 		Input:  messages,
+		Tools:  tools,
 		Stream: true,
 	}
 
 	payload, err := marshalOpenAIRequestBody(
 		reqBody,
-		input.Model.ExtraBody,
+		extraBody,
 		"model",
 		"input",
+		"tools",
 		"stream",
 	)
 	if err != nil {
@@ -93,8 +126,16 @@ func (g *OpenAIResponsesGenerator) Generate(ctx context.Context, input service.G
 }
 
 type openAIResponsesEvent struct {
-	Type  string `json:"type"`
-	Delta string `json:"delta"`
+	Type        string `json:"type"`
+	Delta       string `json:"delta"`
+	OutputIndex int    `json:"output_index"`
+	Item        struct {
+		Type      string `json:"type"`
+		ID        string `json:"id"`
+		CallID    string `json:"call_id"`
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"item"`
 }
 
 func streamOpenAIResponses(body io.ReadCloser, cb service.GenerateCallbacks) error {
@@ -126,9 +167,21 @@ func streamOpenAIResponses(body io.ReadCloser, cb service.GenerateCallbacks) err
 
 		switch currentEvent {
 		case "response.output_text.delta":
-			cb.ContentDelta(payload.Delta)
+			if payload.Delta != "" && cb.ContentDelta != nil {
+				cb.ContentDelta(payload.Delta)
+			}
 		case "response.reasoning_summary_text.delta":
-			cb.ReasoningDelta(payload.Delta)
+			if payload.Delta != "" && cb.ReasoningDelta != nil {
+				cb.ReasoningDelta(payload.Delta)
+			}
+		case "response.output_item.done":
+			if payload.Item.Type == "function_call" && cb.ToolCallCreated != nil {
+				cb.ToolCallCreated(service.ToolCall{
+					ID:        payload.Item.CallID,
+					Name:      payload.Item.Name,
+					Arguments: json.RawMessage(payload.Item.Arguments),
+				})
+			}
 		case "response.completed":
 			return errOpenAIStreamDone
 		}
@@ -175,4 +228,170 @@ func buildOpenAIResponsesURL(baseURL string) string {
 	}
 
 	return baseURL + "/responses"
+}
+
+func buildOpenAIResponsesTools(tools []service.ToolDefinition) ([]json.RawMessage, error) {
+	if len(tools) == 0 {
+		return nil, nil
+	}
+	result := make([]json.RawMessage, 0, len(tools))
+
+	for _, tool := range tools {
+		tmp := openAIResponsesTool{
+			Type:        "function",
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  tool.Parameters,
+		}
+
+		jsonData, err := json.Marshal(tmp)
+		if err != nil {
+			return nil, err
+		}
+
+		result = append(result, jsonData)
+	}
+
+	return result, nil
+}
+
+func buildOpenAIInputMessages(messages []service.GenerateMessage) []openAIResponsesMessage {
+
+	result := make([]openAIResponsesMessage, 0, len(messages))
+
+	for _, message := range messages {
+		switch message.Role {
+		case entity.MessageRoleSystem, entity.MessageRoleUser, entity.MessageRoleAssistant:
+			if message.Role == entity.MessageRoleAssistant && len(message.GenerationRounds) > 0 {
+				result = appendOpenAIResponsesAssistantMessageWithRounds(result, message)
+				continue
+			}
+
+			if message.Role == entity.MessageRoleAssistant && len(message.ToolExchanges) > 0 {
+				result = appendOpenAIResponsesAssistantMessageWithLegacyTools(result, message)
+				continue
+			}
+
+		default:
+			continue
+		}
+
+		content := strings.TrimSpace(message.Content)
+		if message.Role == entity.MessageRoleAssistant {
+			content = strings.TrimSpace(toolCallTagRe.ReplaceAllString(content, ""))
+		}
+
+		if content != "" {
+			result = append(result, openAIResponsesMessage{
+				Role:    message.Role,
+				Content: content,
+			})
+		}
+	}
+
+	return result
+}
+
+func appendOpenAIResponsesAssistantMessageWithRounds(
+	result []openAIResponsesMessage,
+	message service.GenerateMessage,
+) []openAIResponsesMessage {
+	exchangesByRound := groupToolExchangesByRound(message.ToolExchanges)
+
+	for _, round := range message.GenerationRounds {
+		content := sliceByOffset(message.Content, round.ContentStartOffset, round.ContentEndOffset)
+		content = strings.TrimSpace(content)
+		if message.Role == entity.MessageRoleAssistant {
+			content = strings.TrimSpace(toolCallTagRe.ReplaceAllString(content, ""))
+		}
+
+		exchanges := exchangesByRound[round.Round]
+
+		if content != "" {
+			result = append(result, openAIResponsesMessage{
+				Role:    message.Role,
+				Content: content,
+			})
+		}
+
+		for _, ex := range exchanges {
+			result = append(result, openAIResponsesMessage{
+				Type:      "function_call",
+				CallID:    ex.Call.ID,
+				Name:      ex.Call.Name,
+				Arguments: string(ex.Call.Arguments),
+			})
+			result = append(result, openAIResponsesMessage{
+				Type:   "function_call_output",
+				CallID: ex.Call.ID,
+				Output: string(ex.Result.Result),
+			})
+		}
+	}
+
+	return result
+}
+
+func appendOpenAIResponsesAssistantMessageWithLegacyTools(
+	result []openAIResponsesMessage,
+	message service.GenerateMessage,
+) []openAIResponsesMessage {
+	content := strings.TrimSpace(toolCallTagRe.ReplaceAllString(message.Content, ""))
+	if content != "" {
+		result = append(result, openAIResponsesMessage{
+			Role:    entity.MessageRoleAssistant,
+			Content: content,
+		})
+	}
+
+	for _, ex := range message.ToolExchanges {
+		result = append(result, openAIResponsesMessage{
+			Type:      "function_call",
+			CallID:    ex.Call.ID,
+			Name:      ex.Call.Name,
+			Arguments: string(ex.Call.Arguments),
+		})
+		result = append(result, openAIResponsesMessage{
+			Type:   "function_call_output",
+			CallID: ex.Call.ID,
+			Output: string(ex.Result.Result),
+		})
+	}
+
+	return result
+}
+
+// takeOpenAIResponsesExtraTools 取出ExtraBody中的Tools,并移除相应字段
+func takeOpenAIResponsesExtraTools(extraBody string) ([]json.RawMessage, string, error) {
+	if strings.TrimSpace(extraBody) == "" {
+		return nil, extraBody, nil
+	}
+
+	var extra map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(extraBody), &extra); err != nil {
+		return nil, "", err
+	}
+
+	rawTools, ok := extra["tools"]
+	if !ok {
+		return nil, extraBody, nil
+	}
+
+	var tools []json.RawMessage
+	if err := json.Unmarshal(rawTools, &tools); err != nil {
+		return nil, "", errors.New("extra_body tools must be an array")
+	}
+
+	delete(extra, "tools")
+
+	if len(extra) == 0 {
+		return tools, "", nil
+	}
+
+	rest, err := json.Marshal(extra)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return tools, string(rest), nil
 }

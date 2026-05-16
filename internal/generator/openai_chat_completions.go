@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/AlexMeiko/guchat/internal/entity"
@@ -19,8 +18,6 @@ import (
 type OpenAIChatCompletionsGenerator struct {
 	client *http.Client
 }
-
-var toolCallTagRe = regexp.MustCompile(`<!--tool_call:([^>]+)-->`)
 
 func NewOpenAIChatCompletionsGenerator(client *http.Client) *OpenAIChatCompletionsGenerator {
 	if client == nil {
@@ -382,26 +379,6 @@ func decodeOpenAIError(resp *http.Response) error {
 	}
 
 	return fmt.Errorf("openai api error: status %d: %s", resp.StatusCode, text)
-}
-
-func sliceByOffset(content string, start, end int) string {
-	if start < 0 || end < start || start > len(content) {
-		return ""
-	}
-
-	end = min(end, len(content))
-
-	return strings.TrimSpace(content[start:end])
-}
-
-func groupToolExchangesByRound(exchanges []service.ToolExchange) map[int][]service.ToolExchange {
-	result := map[int][]service.ToolExchange{}
-
-	for _, exchange := range exchanges {
-		result[exchange.Round] = append(result[exchange.Round], exchange)
-	}
-
-	return result
 }
 
 func appendOpenAIChatAssistantMessageWithRounds(
