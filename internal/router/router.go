@@ -11,6 +11,7 @@ func New(
 	authHandler *handler.AuthHandler,
 	conversationHandler *handler.ConversationHandler,
 	messageHandler *handler.MessageHandler,
+	memoryHandler *handler.MemoryHandler,
 	modelHandler *handler.ModelHandler,
 	generationHandler *handler.GenerationHandler,
 	jwtService *service.JWTService,
@@ -48,6 +49,13 @@ func New(
 			conversation.POST("/:conversation_id/messages/:message_id/generation", generationHandler.Create)
 			conversation.GET("/:conversation_id/messages/:message_id/events", generationHandler.Events)
 
+		}
+
+		memoryGroup := api.Group("/memory", middleware.Auth(jwtService))
+		{
+			memoryGroup.GET("", memoryHandler.List)
+			memoryGroup.PATCH("/:id/status", memoryHandler.UpdateStatus)
+			memoryGroup.DELETE("/:id", memoryHandler.Delete)
 		}
 
 		models := api.Group("/models", middleware.Auth(jwtService))
