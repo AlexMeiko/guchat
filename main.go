@@ -68,6 +68,7 @@ func main() {
 		tool.NewBuiltinProvider(tool.BuiltinProviderConfig{
 			TavilyAPIKey:  cfg.TavilyAPIKey,
 			TavilyBaseURL: cfg.TavilyBaseURL,
+			MemoryService: memoryService,
 		}),
 	}
 

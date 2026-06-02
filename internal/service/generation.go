@@ -258,7 +258,7 @@ func (s *GenerationService) Process(
 	var tools []ToolDefinition
 	if toolMode == ToolModeAuto {
 		tools, err = s.toolProviderManager.ListTools(ctx, UserContext{
-			UserID: userID,
+			UserID:         userID,
 		})
 		if err != nil {
 			return fail(err)
@@ -383,13 +383,12 @@ func (s *GenerationService) Process(
 			}
 			task.UpdateToolCallRunning(record.ID)
 
-			toolResult, toolErr := s.toolProviderManager.CallTool(ctx, UserContext{UserID: userID}, modelCall.Name, modelCall.Arguments)
+			toolResult, toolErr := s.toolProviderManager.CallTool(ctx, UserContext{UserID: userID, ConversationID: conversationID}, modelCall.Name, modelCall.Arguments)
 
 			if toolErr != nil {
 				toolErrorMessage := toolErr.Error()
 				//工具执行失败
 				payload, marshalErr := json.Marshal(map[string]any{
-					"ok":    false,
 					"error": toolErrorMessage,
 				})
 				if marshalErr != nil {

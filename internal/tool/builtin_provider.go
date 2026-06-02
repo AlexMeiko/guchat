@@ -18,17 +18,22 @@ const (
 	ToolTavilySearch   = "tavily_search"
 	ToolReadWebPage    = "read_web_page"
 
+	ToolSearchMemory = "search_memory"
+	ToolAddMemory    = "add_memory"
+
 	defaultTavilyBaseURL = "https://api.tavily.com"
 )
 
 type BuiltinProviderConfig struct {
 	TavilyAPIKey  string
 	TavilyBaseURL string
+	MemoryService *service.MemoryService
 }
 
 type BuiltinProvider struct {
 	tavilyAPIKey  string
 	tavilyBaseURL string
+	memoryService *service.MemoryService
 }
 
 // 时间工具
@@ -62,6 +67,7 @@ func NewBuiltinProvider(cfg BuiltinProviderConfig) *BuiltinProvider {
 	return &BuiltinProvider{
 		tavilyAPIKey:  strings.TrimSpace(cfg.TavilyAPIKey),
 		tavilyBaseURL: tavilyBaseURL,
+		memoryService: cfg.MemoryService,
 	}
 }
 
@@ -107,6 +113,10 @@ func (p *BuiltinProvider) ListTools(ctx context.Context, user service.UserContex
 		},
 	}
 
+	if p.memoryService != nil {
+		tools = append(tools, p.memoryToolDefinitions()...)
+	}
+
 	if p.tavilyAPIKey != "" {
 		tools = append(tools, service.ToolDefinition{
 			Name:        ToolTavilySearch,
@@ -136,6 +146,10 @@ func (p *BuiltinProvider) CallTool(ctx context.Context, user service.UserContext
 		return p.tavilySearch(ctx, args)
 	case ToolReadWebPage:
 		return p.readWebPage(ctx, args)
+	case ToolSearchMemory:
+		return p.searchMemory(ctx, user, args)
+	case ToolAddMemory:
+		return p.addMemory(ctx, user, args)
 	default:
 		return service.ToolResult{}, service.ErrToolNotFound
 	}
