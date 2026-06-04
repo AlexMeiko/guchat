@@ -198,6 +198,60 @@ func (s *MySQLStore) Search(ctx context.Context, input SearchInput) ([]entity.Me
 	return items, nil
 }
 
+func (s *MySQLStore) ListPrompt(ctx context.Context, filter PromptFilter) ([]entity.MemoryItem, error) {
+	query := `
+SELECT *
+FROM memory_items
+WHERE owner_user_id = ?
+  AND scope = 'user'
+  AND status = 'active'
+  AND (expires_at IS NULL OR expires_at > ?)
+  AND category IN (?)
+ORDER BY
+  CASE category
+    WHEN 'constraint' THEN 0
+    WHEN 'negative_preference' THEN 1
+    WHEN 'user_profile' THEN 2
+    WHEN 'preference' THEN 3
+    ELSE 4
+  END,
+  confidence DESC,
+  updated_at DESC,
+  id DESC
+LIMIT ?`
+
+	categories := filter.Categories
+	if len(categories) == 0 {
+		categories = []string{
+			MemoryCategoryConstraint,
+			MemoryCategoryNegativePreference,
+			MemoryCategoryUserProfile,
+			MemoryCategoryPreference,
+		}
+	}
+
+	args := []any{
+		filter.UserID,
+		time.Now(),
+		categories,
+		normalizeLimit(filter.Limit, 8, 15),
+	}
+
+	query, finalArgs, err := sqlx.In(query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	query = s.db.Rebind(query)
+
+	var items []entity.MemoryItem
+	if err := s.db.SelectContext(ctx, &items, query, finalArgs...); err != nil {
+		return nil, err
+	}
+
+	return items, nil
+}
+
 func normalizeLimit(limit int, defaultLimit int, maxLimit int) int {
 	if limit <= 0 {
 		return defaultLimit

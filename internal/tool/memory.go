@@ -99,7 +99,7 @@ func (p *BuiltinProvider) memoryToolDefinitions() []service.ToolDefinition {
 			},
 			"category": {
 				"type": "string",
-				"description": "记忆分类，例如 preference、fact、knowledge、constraint、daily_summary。缺省值 fact。"
+				"description": "记忆分类，例如 user_profile、preference、fact、knowledge、constraint、negative_preference、daily_summary、situational。缺省值 fact。constraint、negative_preference、user_profile、preference 的 user 记忆可能会在后续会话默认提供给模型，只用于长期稳定、跨会话普遍有用的信息；普通事实、知识、总结、短期状态不要放入这些分类。"
 			},
 			"source_type": {
 				"type": "string",

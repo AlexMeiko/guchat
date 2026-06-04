@@ -122,6 +122,7 @@ func main() {
 	generationService := service.NewGenerationService(
 		messageService,
 		modelService,
+		memoryService,
 		generatorFactory,
 		runtimeManager,
 		toolProviderManager,

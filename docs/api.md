@@ -147,6 +147,9 @@ Authorization: Bearer <access_token>
 | 消息 | DELETE | `/api/conversations/:conversation_id/messages/:message_id` | Yes | user/admin |
 | 生成 | POST | `/api/conversations/:conversation_id/messages/:message_id/generation` | Yes | user/admin |
 | 生成 | GET | `/api/conversations/:conversation_id/messages/:message_id/events` | Yes | user/admin |
+| 记忆 | GET | `/api/memory` | Yes | user/admin |
+| 记忆 | PATCH | `/api/memory/:id/status` | Yes | user/admin |
+| 记忆 | DELETE | `/api/memory/:id` | Yes | user/admin |
 | 模型 | GET | `/api/models` | Yes | user/admin |
 | 模型管理 | GET | `/api/admin/models` | Yes | admin |
 | 模型管理 | POST | `/api/admin/models` | Yes | admin |
@@ -600,6 +603,8 @@ Authorization: Bearer <access_token>
 - `tool_mode` 为可选字段，支持 `auto`、`none`；不传时默认为 `auto`
 - `tool_mode=auto` 时，生成器可使用内置工具和已配置的 MCP 工具
 - `tool_mode=none` 时，本次生成不向模型提供工具
+- 生成前会以 system 消息形式默认注入少量 active、未过期、scope=user 的基础记忆，分类限制为 `constraint`、`negative_preference`、`user_profile`、`preference`
+- 其他历史记忆、事实、总结和知识不会默认注入；`tool_mode=auto` 时模型可通过 `search_memory` 按需检索
 - 上下文裁剪范围截至源消息本身
 
 请求体：
@@ -660,7 +665,110 @@ Authorization: Bearer <access_token>
 
 ---
 
-### 5.6 模型
+### 5.6 记忆
+
+通用 `/api/memory` 只用于管理当前用户自己的私有记忆条目，不提供公共创建接口。记忆由后端内部流程、内置工具或后续专用导入接口创建。
+
+#### `GET /api/memory`
+
+说明：
+
+- 返回当前用户自己的 `user` / `conversation` scope 记忆。
+- 不返回 `global` 记忆。
+- 不传 `status` 时默认返回 `active` 和 `disabled`。
+- 支持按 `status`、`category`、`scope` 过滤，多个值用英文逗号分隔。
+- `limit` 默认 `50`，最大 `100`。
+- `offset` 默认 `0`。
+
+查询参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `status` | 可选，例如 `active`、`disabled`、`deleted` |
+| `category` | 可选，例如 `user_profile`、`preference`、`fact`、`knowledge` |
+| `scope` | 可选，只能是 `user` 或 `conversation` |
+| `limit` | 可选，范围 `1..100` |
+| `offset` | 可选，最小 `0` |
+
+成功响应：`200 OK`
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "conversation_id": "uuid",
+      "scope": "conversation",
+      "category": "preference",
+      "origin": "assistant_summary",
+      "source_type": "conversation",
+      "source_ref": "uuid",
+      "source_title": "会话标题",
+      "content": "用户希望助手称呼自己为 a。",
+      "metadata": {},
+      "confidence": 1,
+      "expires_at": "2026-06-30T12:00:00+08:00",
+      "status": "active",
+      "created_at": "2026-06-04T12:00:00+08:00",
+      "updated_at": "2026-06-04T12:00:00+08:00"
+    }
+  ]
+}
+```
+
+常见失败：
+
+- `400 invalid limit`
+- `400 invalid offset`
+- `400 invalid memory filter`
+- `401 missing Authorization header`
+- `500 internal server error`
+
+#### `PATCH /api/memory/:id/status`
+
+请求体：
+
+```json
+{
+  "status": "disabled"
+}
+```
+
+说明：
+
+- 支持目标状态：`active`、`disabled`、`deleted`。
+- 只能管理当前用户自己的 `user` / `conversation` scope 记忆。
+- 已删除记忆不能重新启用。
+- 普通用户不能通过该接口管理 `global` 记忆。
+
+成功响应：`204 No Content`
+
+常见失败：
+
+- `400 invalid memory id`
+- `400 invalid request body`
+- `400 invalid memory status`
+- `404 memory item not found`
+- `500 internal server error`
+
+#### `DELETE /api/memory/:id`
+
+说明：
+
+- 软删除当前用户自己的 `user` / `conversation` scope 记忆。
+- 成功后该条目不再被默认注入或工具检索返回。
+
+成功响应：`204 No Content`
+
+常见失败：
+
+- `400 invalid memory id`
+- `404 memory item not found`
+- `500 internal server error`
+
+---
+
+### 5.7 模型
 
 #### `GET /api/models`
 
@@ -1056,7 +1164,94 @@ data: <json>
 | --- | --- | --- |
 | `get_current_time` | 默认启用 | 获取指定 IANA 时区的当前时间 |
 | `read_web_page` | 默认启用 | 读取公开网页正文 |
+| `search_memory` | MemoryService 已配置 | 搜索当前用户、当前会话和公共范围内的 active 记忆或知识 |
+| `add_memory` | MemoryService 已配置 | 写入 active 的 user / conversation scope 记忆 |
 | `tavily_search` | 配置 `TAVILY_API_KEY` | 使用 Tavily 搜索互联网信息 |
+
+生成前会默认向模型提供少量基础记忆，但不会默认注入全部记忆或知识。默认注入只包含 active、未过期、scope=user 的 `constraint`、`negative_preference`、`user_profile`、`preference` 条目。需要更多历史记忆、事实、总结或知识时，模型应通过 `search_memory` 检索。
+
+#### `search_memory`
+
+请求参数由模型生成，后端不会允许模型传 `user_id`、`conversation_id` 或 `status`。
+
+```json
+{
+  "query": "用户希望我如何称呼他？",
+  "keywords": ["称呼", "用户"],
+  "categories": ["user_profile", "preference"],
+  "scopes": ["user", "conversation", "global"],
+  "limit": 5
+}
+```
+
+说明：
+
+- `query`：自然语言检索意图。
+- `keywords`：关键词或短语数组。第一版 MySQL LIKE 检索依赖关键词，中文检索时应优先提供明确词语、实体名、项目名或概念名。
+- `categories`、`scopes`：可选过滤条件。
+- `limit`：可选，未传或小于等于 `0` 时使用后端默认值；当前最多返回 `20` 条。
+- 只返回 `active` 且未过期的条目。
+
+成功结果示例：
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "scope": "user",
+      "category": "user_profile",
+      "source_type": "conversation",
+      "source_ref": "uuid",
+      "content": "用户希望助手称呼自己为 a。",
+      "confidence": 1,
+      "updated_at": "2026-06-04T12:00:00+08:00"
+    }
+  ]
+}
+```
+
+#### `add_memory`
+
+请求参数由模型生成，后端不会允许模型传 `user_id`、`conversation_id`、`origin` 或 `status`。
+
+```json
+{
+  "scope": "user",
+  "category": "user_profile",
+  "source_type": "conversation",
+  "content": "用户希望助手称呼自己为 a。",
+  "confidence": 1
+}
+```
+
+说明：
+
+- `content` 必填，应简洁、明确、可复用。
+- `scope` 可选，只能是 `user` 或 `conversation`；缺省值为 `user`。
+- `category` 可选；缺省值为 `fact`。
+- `source_type` 可选，例如 `none`、`conversation`、`web`、`file`、`api`、`repo`、`manual`。在对话中未传时，`add_memory` 默认记录为当前会话来源，相关来源引用由后端自动处理。
+- `source_ref` 可选。`source_type=conversation` 时不需要传，当前会话来源由后端自动处理；网页、文件、repo 等外部来源可传 URL、文件 key 或 repo path。
+- `source_title` 可选。
+- `confidence` 可选，范围 `0..1`；未传时后端默认处理。
+- `expires_at` 可选，RFC3339 格式；长期有效的记忆不要传。
+- `category=constraint`、`negative_preference`、`user_profile`、`preference` 的 user scope 条目可能会在后续会话默认提供给模型，因此只应用于长期稳定、跨会话普遍有用的信息。普通事实、知识、总结、短期状态不要放入这些分类。
+
+成功结果示例：
+
+```json
+{
+  "ok": true
+}
+```
+
+工具失败时，工具结果会以 JSON 字符串形式记录为：
+
+```json
+{
+  "error": "错误描述"
+}
+```
 
 外部 MCP 工具由服务端配置决定。MCP 工具暴露给模型时会自动加上服务名前缀，例如服务名为 `tavily` 且远端工具名为 `tavily_extract` 时，模型侧工具名为 `tavily.tavily_extract`。
 

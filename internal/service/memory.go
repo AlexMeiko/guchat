@@ -274,6 +274,17 @@ func (s *MemoryService) SearchActive(
 	})
 }
 
+func (s *MemoryService) ListPromptMemories(
+	ctx context.Context,
+	userID int64,
+	limit int,
+) ([]entity.MemoryItem, error) {
+	return s.memoryStore.ListPrompt(ctx, memory.PromptFilter{
+		UserID: userID,
+		Limit:  limit,
+	})
+}
+
 func (s *MemoryService) updateStatus(ctx context.Context, userID int64, id int64, status string) error {
 	item, err := s.memoryStore.GetByID(ctx, userID, id)
 	if err != nil {

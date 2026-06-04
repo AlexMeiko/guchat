@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +22,8 @@ var (
 const (
 	ToolModeNone = "none"
 	ToolModeAuto = "auto"
+
+	promptMemoryLimit = 15
 )
 
 type CreateGenerationInput struct {
@@ -41,6 +44,7 @@ type generationRetryItem struct {
 type GenerationService struct {
 	messageService      *MessageService
 	modelService        *ModelService
+	memoryService       *MemoryService
 	generatorFactory    GeneratorFactory
 	runtimeManager      *stream.Manager
 	toolProviderManager *ToolProviderManager
@@ -63,6 +67,7 @@ func newGeneratedToolCallID(assistantMessageID string, round int, seq int) strin
 func NewGenerationService(
 	messageService *MessageService,
 	modelService *ModelService,
+	memoryService *MemoryService,
 	generatorFactory GeneratorFactory,
 	runtimeManager *stream.Manager,
 	toolProviderManager *ToolProviderManager,
@@ -76,6 +81,7 @@ func NewGenerationService(
 	return &GenerationService{
 		messageService:      messageService,
 		modelService:        modelService,
+		memoryService:       memoryService,
 		generatorFactory:    generatorFactory,
 		runtimeManager:      runtimeManager,
 		toolProviderManager: toolProviderManager,
@@ -224,6 +230,18 @@ func (s *GenerationService) Process(
 	// 开始构造带工具的上下文
 	generateMessages := newGenerateMessages(messages)
 
+	// 记忆注入
+	if s.memoryService != nil {
+		promptMemories, err := s.memoryService.ListPromptMemories(ctx, userID, promptMemoryLimit)
+		if err != nil {
+			return fail(err)
+		}
+
+		if promptMemoryMessage := newPromptMemoryMessage(promptMemories, toolMode); promptMemoryMessage != nil {
+			generateMessages = append([]GenerateMessage{*promptMemoryMessage}, generateMessages...)
+		}
+	}
+
 	// 查询每条信息调用过的工具，并把工具调用结果构造成工具交换记录放到上下文里面
 	assistantMessageIDs := make([]string, 0)
 	for i := range generateMessages {
@@ -258,7 +276,7 @@ func (s *GenerationService) Process(
 	var tools []ToolDefinition
 	if toolMode == ToolModeAuto {
 		tools, err = s.toolProviderManager.ListTools(ctx, UserContext{
-			UserID:         userID,
+			UserID: userID,
 		})
 		if err != nil {
 			return fail(err)
@@ -583,6 +601,35 @@ func groupGenerationRoundsByMessageID(records []entity.GenerationRound) map[stri
 	}
 
 	return result
+}
+
+func newPromptMemoryMessage(items []entity.MemoryItem, toolMode string) *GenerateMessage {
+	if len(items) == 0 && toolMode != ToolModeAuto {
+		return nil
+	}
+
+	var lines []string
+
+	if len(items) > 0 {
+		lines = append(lines, "以下是当前用户的长期偏好和用户画像记忆。请在回答时自然遵守，不要主动说明这些记忆的存在。")
+		for _, item := range items {
+			lines = append(lines, "- "+strings.TrimSpace(item.Content))
+		}
+	}
+
+	if toolMode == ToolModeAuto {
+		lines = append(lines, "如果需要更多历史记忆、偏好、事实、总结或知识，可以调用 search_memory。")
+		lines = append(lines, "当用户明确要求记住信息，或当前对话产生了长期有用的信息时，可以调用 add_memory。")
+	}
+
+	if len(lines) == 0 {
+		return nil
+	}
+
+	return &GenerateMessage{
+		Role:    entity.MessageRoleSystem,
+		Content: strings.Join(lines, "\n"),
+	}
 }
 
 func (s *GenerationService) removeRetry(messageID string) {

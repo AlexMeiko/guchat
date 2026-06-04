@@ -83,9 +83,16 @@ type SearchInput struct {
 	Limit          int
 }
 
+type PromptFilter struct {
+	UserID     int64
+	Categories []string
+	Limit      int
+}
+
 type Store interface {
 	Create(ctx context.Context, item *entity.MemoryItem) error
 	List(ctx context.Context, filter ListFilter) ([]entity.MemoryItem, error)
+	ListPrompt(ctx context.Context, filter PromptFilter) ([]entity.MemoryItem, error)
 	GetByID(ctx context.Context, userID int64, id int64) (*entity.MemoryItem, error)
 	UpdateStatus(ctx context.Context, userID int64, id int64, status string) (bool, error)
 	SoftDelete(ctx context.Context, userID int64, id int64) (bool, error)
