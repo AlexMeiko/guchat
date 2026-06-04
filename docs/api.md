@@ -1166,6 +1166,7 @@ data: <json>
 | `read_web_page` | 默认启用 | 读取公开网页正文 |
 | `search_memory` | MemoryService 已配置 | 搜索当前用户、当前会话和公共范围内的 active 记忆或知识 |
 | `add_memory` | MemoryService 已配置 | 写入 active 的 user / conversation scope 记忆 |
+| `disable_memory` | MemoryService 已配置 | 禁用当前用户自己的 user / conversation scope 记忆 |
 | `tavily_search` | 配置 `TAVILY_API_KEY` | 使用 Tavily 搜索互联网信息 |
 
 生成前会默认向模型提供少量基础记忆，但不会默认注入全部记忆或知识。默认注入只包含 active、未过期、scope=user 的 `constraint`、`negative_preference`、`user_profile`、`preference` 条目。需要更多历史记忆、事实、总结或知识时，模型应通过 `search_memory` 检索。
@@ -1236,6 +1237,31 @@ data: <json>
 - `confidence` 可选，范围 `0..1`；未传时后端默认处理。
 - `expires_at` 可选，RFC3339 格式；长期有效的记忆不要传。
 - `category=constraint`、`negative_preference`、`user_profile`、`preference` 的 user scope 条目可能会在后续会话默认提供给模型，因此只应用于长期稳定、跨会话普遍有用的信息。普通事实、知识、总结、短期状态不要放入这些分类。
+
+成功结果示例：
+
+```json
+{
+  "ok": true
+}
+```
+
+#### `disable_memory`
+
+请求参数由模型生成，后端不会允许模型传 `user_id`、`conversation_id`、`scope` 或 `status`。
+
+```json
+{
+  "id": 1
+}
+```
+
+说明：
+
+- `id` 必填，应来自 `search_memory` 返回的当前用户私有记忆 ID。
+- 只能禁用当前用户自己的 `user` / `conversation` scope 记忆，不能禁用 `global` 记忆或其他用户的记忆。
+- 禁用后状态变为 `disabled`，不会再被默认注入或被 `search_memory` 检索到；数据仍保留在数据库中。
+- 只有当用户明确要求忘记、不要再记住、禁用某条记忆，或明确纠正已保存记忆时才应使用。通常应先调用 `search_memory` 定位目标 ID。
 
 成功结果示例：
 

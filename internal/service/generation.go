@@ -620,6 +620,7 @@ func newPromptMemoryMessage(items []entity.MemoryItem, toolMode string) *Generat
 	if toolMode == ToolModeAuto {
 		lines = append(lines, "如果需要更多历史记忆、偏好、事实、总结或知识，可以调用 search_memory。")
 		lines = append(lines, "当用户明确要求记住信息，或当前对话产生了长期有用的信息时，可以调用 add_memory。")
+		lines = append(lines, "当用户明确要求忘记、不要再记住、禁用某条记忆，或明确纠正已保存记忆时，先用 search_memory 找到对应私有记忆 ID，再调用 disable_memory；调用后不要再依据或复述该记忆。")
 	}
 
 	if len(lines) == 0 {

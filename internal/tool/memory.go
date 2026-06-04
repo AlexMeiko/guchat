@@ -39,6 +39,14 @@ type addMemoryArgs struct {
 	ExpiresAt   string  `json:"expires_at"`
 }
 
+type disableMemoryResult struct {
+	OK bool `json:"ok"`
+}
+
+type disableMemoryArgs struct {
+	ID int64 `json:"id"`
+}
+
 type memoryToolItem struct {
 	ID          int64     `json:"id"`
 	Scope       string    `json:"scope"`
@@ -91,44 +99,59 @@ func (p *BuiltinProvider) memoryToolDefinitions() []service.ToolDefinition {
 			Name:        ToolAddMemory,
 			Description: "写入一条 active 记忆。仅当用户明确要求记住某件事，或当前对话产生了后续明显有用的长期信息时使用。不能创建 global 记忆，不能传 user_id、conversation_id、origin 或 status。",
 			Parameters: json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"scope": {
-				"type": "string",
-				"description": "记忆范围，只能是 user 或 conversation。缺省值 user。"
-			},
-			"category": {
-				"type": "string",
-				"description": "记忆分类，例如 user_profile、preference、fact、knowledge、constraint、negative_preference、daily_summary、situational。缺省值 fact。constraint、negative_preference、user_profile、preference 的 user 记忆可能会在后续会话默认提供给模型，只用于长期稳定、跨会话普遍有用的信息；普通事实、知识、总结、短期状态不要放入这些分类。"
-			},
-			"source_type": {
-				"type": "string",
-				"description": "来源类型，例如 none、conversation、web、file、api、repo、manual。在对话中未传时，add_memory 默认记录为当前会话来源，相关来源引用由后端自动处理。"
-			},
-			"source_ref": {
-				"type": "string",
-				"description": "来源引用，例如 URL、文件 key、repo path。source_type=conversation 时不需要传，当前会话来源由后端自动处理。"
-			},
-			"source_title": {
-				"type": "string",
-				"description": "来源标题，例如网页标题、文件名、文档标题。"
-			},
-			"content": {
-				"type": "string",
-				"description": "要保存的记忆正文，应简洁、明确、可复用。"
-			},
-			"confidence": {
-				"type": "number",
-				"description": "可信度，范围 0 到 1。未传时后端默认处理。"
-			},
-			"expires_at": {
-				"type": "string",
-				"description": "可选过期时间，RFC3339 格式。长期有效的记忆不要传。"
-			}
+				"type": "object",
+				"properties": {
+					"scope": {
+						"type": "string",
+						"description": "记忆范围，只能是 user 或 conversation。缺省值 user。"
+					},
+					"category": {
+						"type": "string",
+						"description": "记忆分类，例如 user_profile、preference、fact、knowledge、constraint、negative_preference、daily_summary、situational。缺省值 fact。constraint、negative_preference、user_profile、preference 的 user 记忆可能会在后续会话默认提供给模型，只用于长期稳定、跨会话普遍有用的信息；普通事实、知识、总结、短期状态不要放入这些分类。"
+					},
+					"source_type": {
+						"type": "string",
+						"description": "来源类型，例如 none、conversation、web、file、api、repo、manual。在对话中未传时，add_memory 默认记录为当前会话来源，相关来源引用由后端自动处理。"
+					},
+					"source_ref": {
+						"type": "string",
+						"description": "来源引用，例如 URL、文件 key、repo path。source_type=conversation 时不需要传，当前会话来源由后端自动处理。"
+					},
+					"source_title": {
+						"type": "string",
+						"description": "来源标题，例如网页标题、文件名、文档标题。"
+					},
+					"content": {
+						"type": "string",
+						"description": "要保存的记忆正文，应简洁、明确、可复用。"
+					},
+					"confidence": {
+						"type": "number",
+						"description": "可信度，范围 0 到 1。未传时后端默认处理。"
+					},
+					"expires_at": {
+						"type": "string",
+						"description": "可选过期时间，RFC3339 格式。长期有效的记忆不要传。"
+					}
+				},
+				"required": ["content"],
+				"additionalProperties": false
+			}`),
 		},
-		"required": ["content"],
-		"additionalProperties": false
-	}`),
+		{
+			Name:        ToolDisableMemory,
+			Description: "禁用一条记忆，使其不再被后续检索到。只能禁用 user 自己的记忆。禁用后记忆状态变为 disabled，但数据仍保留在数据库中。",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {
+						"type": "integer",
+						"description": "要禁用的记忆 ID。"
+					}
+				},
+				"required": ["id"],
+				"additionalProperties": false
+			}`),
 		},
 	}
 }
@@ -138,7 +161,7 @@ func (p *BuiltinProvider) searchMemory(ctx context.Context, user service.UserCon
 		return service.ToolResult{}, fmt.Errorf("memory service is not configured")
 	}
 	if user.UserID <= 0 {
-		return service.ToolResult{}, fmt.Errorf("user is required")
+		return service.ToolResult{}, fmt.Errorf("invalid user context")
 	}
 
 	var input searchMemoryArgs
@@ -193,7 +216,7 @@ func (p *BuiltinProvider) addMemory(ctx context.Context, user service.UserContex
 		return service.ToolResult{}, fmt.Errorf("memory service is not configured")
 	}
 	if user.UserID <= 0 {
-		return service.ToolResult{}, fmt.Errorf("user is required")
+		return service.ToolResult{}, fmt.Errorf("invalid user context")
 	}
 
 	var input addMemoryArgs
@@ -247,6 +270,41 @@ func (p *BuiltinProvider) addMemory(ctx context.Context, user service.UserContex
 
 	return service.ToolResult{
 		Name:   ToolAddMemory,
+		Result: payload,
+	}, nil
+}
+
+func (p *BuiltinProvider) disableMemory(ctx context.Context, user service.UserContext, args json.RawMessage) (service.ToolResult, error) {
+	if p.memoryService == nil {
+		return service.ToolResult{}, fmt.Errorf("memory service is not configured")
+	}
+	if user.UserID <= 0 {
+		return service.ToolResult{}, fmt.Errorf("invalid user context")
+	}
+
+	var input disableMemoryArgs
+	if err := json.Unmarshal(args, &input); err != nil {
+		return service.ToolResult{}, err
+	}
+
+	if input.ID <= 0 {
+		return service.ToolResult{}, fmt.Errorf("invalid memory id")
+	}
+
+	err := p.memoryService.Disable(ctx, user.UserID, input.ID)
+	if err != nil {
+		return service.ToolResult{}, err
+	}
+
+	payload, err := json.Marshal(disableMemoryResult{
+		OK: true,
+	})
+	if err != nil {
+		return service.ToolResult{}, err
+	}
+
+	return service.ToolResult{
+		Name:   ToolDisableMemory,
 		Result: payload,
 	}, nil
 }

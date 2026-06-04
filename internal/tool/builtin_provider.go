@@ -18,8 +18,9 @@ const (
 	ToolTavilySearch   = "tavily_search"
 	ToolReadWebPage    = "read_web_page"
 
-	ToolSearchMemory = "search_memory"
-	ToolAddMemory    = "add_memory"
+	ToolSearchMemory  = "search_memory"
+	ToolAddMemory     = "add_memory"
+	ToolDisableMemory = "disable_memory"
 
 	defaultTavilyBaseURL = "https://api.tavily.com"
 )
@@ -150,6 +151,8 @@ func (p *BuiltinProvider) CallTool(ctx context.Context, user service.UserContext
 		return p.searchMemory(ctx, user, args)
 	case ToolAddMemory:
 		return p.addMemory(ctx, user, args)
+	case ToolDisableMemory:
+		return p.disableMemory(ctx, user, args)
 	default:
 		return service.ToolResult{}, service.ErrToolNotFound
 	}
