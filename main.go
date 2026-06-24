@@ -52,7 +52,8 @@ func main() {
 	conversationHandler := handler.NewConversationHandler(conversationService)
 
 	memoryStore := memory.NewMySQLStore(mysqlDB)
-	memoryService := service.NewMemoryService(memoryStore, conversationRepo)
+	memoryRetriever := memory.NewMySQLRetriever(memoryStore)
+	memoryService := service.NewMemoryService(memoryStore, memoryRetriever, conversationRepo)
 	memoryHandler := handler.NewMemoryHandler(memoryService)
 
 	messageRepo := repository.NewMessageRepository(mysqlDB)

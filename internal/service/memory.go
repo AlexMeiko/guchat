@@ -65,6 +65,7 @@ var (
 
 type MemoryService struct {
 	memoryStore      memory.Store
+	memoryRetriever  memory.Retriever
 	conversationRepo *repository.ConversationRepository
 }
 
@@ -84,10 +85,12 @@ type CreateMemoryInput struct {
 
 func NewMemoryService(
 	memoryStore memory.Store,
+	memoryRetriever memory.Retriever,
 	conversationRepo *repository.ConversationRepository,
 ) *MemoryService {
 	return &MemoryService{
 		memoryStore:      memoryStore,
+		memoryRetriever:  memoryRetriever,
 		conversationRepo: conversationRepo,
 	}
 }
@@ -247,7 +250,7 @@ func (s *MemoryService) SearchActive(
 	limit int,
 	categories []string,
 	scopes []string,
-) ([]entity.MemoryItem, error) {
+) ([]memory.SearchHit, error) {
 	categories, err := normalizeMemoryCategories(categories)
 	if err != nil {
 		return nil, err
@@ -263,7 +266,7 @@ func (s *MemoryService) SearchActive(
 		}
 	}
 
-	return s.memoryStore.Search(ctx, memory.SearchInput{
+	return s.memoryRetriever.Search(ctx, memory.SearchInput{
 		UserID:         userID,
 		ConversationID: conversationID,
 		Query:          query,

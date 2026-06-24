@@ -181,7 +181,7 @@ func (p *BuiltinProvider) searchMemory(ctx context.Context, user service.UserCon
 		return service.ToolResult{}, fmt.Errorf("keywords is required")
 	}
 
-	items, err := p.memoryService.SearchActive(
+	hits, err := p.memoryService.SearchActive(
 		ctx,
 		user.UserID,
 		user.ConversationID,
@@ -195,8 +195,12 @@ func (p *BuiltinProvider) searchMemory(ctx context.Context, user service.UserCon
 		return service.ToolResult{}, err
 	}
 
-	resultItems := make([]memoryToolItem, 0, len(items))
-	for _, item := range items {
+	resultItems := make([]memoryToolItem, 0, len(hits))
+	for _, hit := range hits {
+		item := hit.Item
+		if hit.Content != "" {
+			item.Content = hit.Content
+		}
 		resultItems = append(resultItems, toMemoryToolItem(item))
 	}
 
