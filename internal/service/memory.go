@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -65,6 +66,7 @@ var (
 
 type MemoryService struct {
 	memoryStore      memory.Store
+	memoryIndexer    memory.Indexer
 	memoryRetriever  memory.Retriever
 	conversationRepo *repository.ConversationRepository
 }
@@ -87,11 +89,13 @@ func NewMemoryService(
 	memoryStore memory.Store,
 	memoryRetriever memory.Retriever,
 	conversationRepo *repository.ConversationRepository,
+	memoryIndexer memory.Indexer,
 ) *MemoryService {
 	return &MemoryService{
 		memoryStore:      memoryStore,
 		memoryRetriever:  memoryRetriever,
 		conversationRepo: conversationRepo,
+		memoryIndexer:    memoryIndexer,
 	}
 }
 
@@ -187,7 +191,14 @@ func (s *MemoryService) Create(
 		return nil, err
 	}
 
-	return s.memoryStore.GetByID(ctx, userID, item.ID)
+	created, err := s.memoryStore.GetByID(ctx, userID, item.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.indexMemory(ctx, *created)
+
+	return created, nil
 }
 
 func (s *MemoryService) ListOwned(
@@ -238,6 +249,9 @@ func (s *MemoryService) Delete(ctx context.Context, userID int64, id int64) erro
 	if !deleted {
 		return ErrMemoryItemNotFound
 	}
+
+	s.deleteMemoryIndex(ctx, id)
+
 	return nil
 }
 
@@ -313,7 +327,37 @@ func (s *MemoryService) updateStatus(ctx context.Context, userID int64, id int64
 		return ErrMemoryItemNotFound
 	}
 
+	if status == memory.MemoryStatusActive {
+		item.Status = memory.MemoryStatusActive
+		s.indexMemory(ctx, *item)
+		return nil
+	}
+
+	if status == memory.MemoryStatusDisabled || status == memory.MemoryStatusDeleted {
+		s.deleteMemoryIndex(ctx, id)
+	}
+
 	return nil
+}
+
+func (s *MemoryService) indexMemory(ctx context.Context, item entity.MemoryItem) {
+	if s.memoryIndexer == nil {
+		return
+	}
+
+	if err := s.memoryIndexer.Index(ctx, item); err != nil {
+		log.Printf("memory index failed: memory_item_id=%d error=%v", item.ID, err)
+	}
+}
+
+func (s *MemoryService) deleteMemoryIndex(ctx context.Context, id int64) {
+	if s.memoryIndexer == nil {
+		return
+	}
+
+	if err := s.memoryIndexer.Delete(ctx, id); err != nil {
+		log.Printf("memory index delete failed: memory_item_id=%d error=%v", id, err)
+	}
 }
 
 func (s *MemoryService) ensureConversationOwned(ctx context.Context, userID int64, conversationID string) error {

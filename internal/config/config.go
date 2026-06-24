@@ -23,6 +23,19 @@ type Config struct {
 	GenerationRetryMax      int64
 	TavilyAPIKey            string
 	TavilyBaseURL           string
+	EmbeddingProvider       string
+	EmbeddingBaseURL        string
+	EmbeddingAPIKey         string
+	EmbeddingModel          string
+	EmbeddingDim            int
+	QdrantURL               string
+	QdrantAPIKey            string
+	QdrantCollection        string
+	QdrantDistance          string
+	RAGSplitterProvider     string
+	RAGSplitterAPIURL       string
+	RAGSplitterAPIHeaders   string
+	RAGSplitterSegmentsPath string
 
 	MCPServers []MCPServerConfig
 }
@@ -71,9 +84,34 @@ func Load() (Config, error) {
 		GenerationRetryMax:      max(getEnvInt64("GENERATION_RETRY_MAX", 5), 1),
 		TavilyAPIKey:            strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
 		TavilyBaseURL:           strings.TrimRight(strings.TrimSpace(getEnv("TAVILY_BASE_URL", defaultTavilyBaseURL)), "/"),
+		EmbeddingProvider:       strings.TrimSpace(os.Getenv("EMBEDDING_PROVIDER")),
+		EmbeddingBaseURL:        strings.TrimRight(strings.TrimSpace(os.Getenv("EMBEDDING_BASE_URL")), "/"),
+		EmbeddingAPIKey:         strings.TrimSpace(os.Getenv("EMBEDDING_API_KEY")),
+		EmbeddingModel:          strings.TrimSpace(os.Getenv("EMBEDDING_MODEL")),
+		EmbeddingDim:            int(max(getEnvInt64("EMBEDDING_DIM", 0), 0)),
+		QdrantURL:               strings.TrimRight(strings.TrimSpace(os.Getenv("QDRANT_URL")), "/"),
+		QdrantAPIKey:            strings.TrimSpace(os.Getenv("QDRANT_API_KEY")),
+		QdrantCollection:        strings.TrimSpace(os.Getenv("QDRANT_COLLECTION")),
+		QdrantDistance:          strings.TrimSpace(getEnv("QDRANT_DISTANCE", "Cosine")),
+		RAGSplitterProvider:     strings.TrimSpace(os.Getenv("RAG_SPLITTER_PROVIDER")),
+		RAGSplitterAPIURL:       strings.TrimSpace(os.Getenv("RAG_SPLITTER_API_URL")),
+		RAGSplitterAPIHeaders:   strings.TrimSpace(getEnv("RAG_SPLITTER_API_HEADERS_JSON", "{}")),
+		RAGSplitterSegmentsPath: strings.TrimSpace(getEnv("RAG_SPLITTER_API_SEGMENTS_PATH", "chunks")),
 
 		MCPServers: mcpServers,
 	}, nil
+}
+
+func (c Config) MemoryRAGEnabled() bool {
+	return c.EmbeddingProvider != "" &&
+		c.EmbeddingBaseURL != "" &&
+		c.EmbeddingModel != "" &&
+		c.EmbeddingDim > 0 &&
+		c.QdrantURL != "" &&
+		c.QdrantCollection != "" &&
+		c.RAGSplitterProvider != "" &&
+		c.RAGSplitterAPIURL != "" &&
+		c.RAGSplitterSegmentsPath != ""
 }
 
 func getEnv(key, fallback string) string {

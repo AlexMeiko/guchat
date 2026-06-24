@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -11,6 +13,9 @@ import (
 	"github.com/AlexMeiko/guchat/internal/generator"
 	"github.com/AlexMeiko/guchat/internal/handler"
 	"github.com/AlexMeiko/guchat/internal/memory"
+	"github.com/AlexMeiko/guchat/internal/memory/embed"
+	"github.com/AlexMeiko/guchat/internal/memory/segment"
+	"github.com/AlexMeiko/guchat/internal/memory/vector"
 	"github.com/AlexMeiko/guchat/internal/repository"
 	"github.com/AlexMeiko/guchat/internal/router"
 	"github.com/AlexMeiko/guchat/internal/service"
@@ -31,6 +36,18 @@ func main() {
 	}
 
 	defer mysqlDB.Close()
+
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     0,
+		IdleConnTimeout:     60 * time.Second,
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   0,
+	}
 
 	jwtService := service.NewJWTService(
 		cfg.JWTSecret,
@@ -53,7 +70,13 @@ func main() {
 
 	memoryStore := memory.NewMySQLStore(mysqlDB)
 	memoryRetriever := memory.NewMySQLRetriever(memoryStore)
-	memoryService := service.NewMemoryService(memoryStore, memoryRetriever, conversationRepo)
+
+	memoryIndexer, err := buildMemoryIndexer(context.Background(), client, cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	memoryService := service.NewMemoryService(memoryStore, memoryRetriever, conversationRepo, memoryIndexer)
 	memoryHandler := handler.NewMemoryHandler(memoryService)
 
 	messageRepo := repository.NewMessageRepository(mysqlDB)
@@ -102,18 +125,6 @@ func main() {
 
 	modelHandler := handler.NewModelHandler(modelService)
 
-	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		MaxConnsPerHost:     0,
-		IdleConnTimeout:     60 * time.Second,
-	}
-
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   0,
-	}
-
 	generatorFactory := generator.NewFactory(map[string]service.Generator{
 		"openai":           generator.NewOpenAIChatCompletionsGenerator(client),
 		"openai_responses": generator.NewOpenAIResponsesGenerator(client),
@@ -144,4 +155,85 @@ func main() {
 	if err := r.Run(":" + cfg.Port); err != nil {
 		panic(err)
 	}
+}
+
+func buildMemoryIndexer(ctx context.Context, client *http.Client, cfg config.Config) (memory.Indexer, error) {
+	if !cfg.MemoryRAGEnabled() {
+		return nil, nil
+	}
+
+	splitter, err := buildMemorySplitter(client, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	embedder, err := buildMemoryEmbedder(client, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	index, err := buildMemoryVectorIndex(ctx, client, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return memory.NewVectorIndexer(splitter, embedder, index)
+}
+
+func buildMemorySplitter(client *http.Client, cfg config.Config) (segment.Splitter, error) {
+	switch cfg.RAGSplitterProvider {
+	case "external_api":
+		var headers map[string]string
+		if cfg.RAGSplitterAPIHeaders != "" {
+			if err := json.Unmarshal([]byte(cfg.RAGSplitterAPIHeaders), &headers); err != nil {
+				return nil, err
+			}
+		}
+
+		return &segment.ExternalAPISplitter{
+			URL:          cfg.RAGSplitterAPIURL,
+			Headers:      headers,
+			SegmentsPath: cfg.RAGSplitterSegmentsPath,
+			Client:       client,
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported rag splitter provider: %s", cfg.RAGSplitterProvider)
+	}
+}
+
+func buildMemoryEmbedder(client *http.Client, cfg config.Config) (embed.Embedder, error) {
+	switch cfg.EmbeddingProvider {
+	case "openai":
+		return embed.NewOpenAIEmbedder(client, embed.OpenAIEmbedderConfig{
+			BaseURL: cfg.EmbeddingBaseURL,
+			APIKey:  cfg.EmbeddingAPIKey,
+			Model:   cfg.EmbeddingModel,
+		})
+
+	default:
+		return nil, fmt.Errorf("unsupported embedding provider: %s", cfg.EmbeddingProvider)
+	}
+}
+
+func buildMemoryVectorIndex(ctx context.Context, client *http.Client, cfg config.Config) (vector.Index, error) {
+	index, err := vector.NewQdrantIndex(client, vector.QdrantConfig{
+		BaseURL:    cfg.QdrantURL,
+		APIKey:     cfg.QdrantAPIKey,
+		Collection: cfg.QdrantCollection,
+		VectorSize: cfg.EmbeddingDim,
+		Distance:   cfg.QdrantDistance,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err := index.EnsureCollection(ctx); err != nil {
+		return nil, err
+	}
+	if err := index.EnsureIndexes(ctx); err != nil {
+		return nil, err
+	}
+
+	return index, nil
 }

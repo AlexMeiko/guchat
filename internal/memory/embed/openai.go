@@ -29,8 +29,9 @@ type OpenAIEmbedderConfig struct {
 }
 
 type openAIEmbeddingRequest struct {
-	Model string   `json:"model"`
-	Input []string `json:"input"`
+	Model          string   `json:"model"`
+	Input          []string `json:"input"`
+	EncodingFormat string   `json:"encoding_format"`
 }
 
 type openAIEmbeddingResponse struct {
@@ -46,7 +47,7 @@ func NewOpenAIEmbedder(client *http.Client, cfg OpenAIEmbedderConfig) (*OpenAIEm
 	apiKey := strings.TrimSpace(cfg.APIKey)
 	model := strings.TrimSpace(cfg.Model)
 
-	if baseURL == "" || apiKey == "" || model == "" {
+	if baseURL == "" || model == "" {
 		return nil, ErrInvalidEmbedderConfig
 	}
 
@@ -73,8 +74,9 @@ func (e *OpenAIEmbedder) EmbedTexts(ctx context.Context, input EmbedInput) (*Emb
 	}
 
 	reqBody, err := json.Marshal(openAIEmbeddingRequest{
-		Model: e.model,
-		Input: input.Texts,
+		Model:          e.model,
+		Input:          input.Texts,
+		EncodingFormat: "float",
 	})
 	if err != nil {
 		return nil, err
@@ -85,7 +87,9 @@ func (e *OpenAIEmbedder) EmbedTexts(ctx context.Context, input EmbedInput) (*Emb
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+e.apiKey)
+	if e.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+e.apiKey)
+	}
 
 	resp, err := e.client.Do(req)
 	if err != nil {
@@ -94,7 +98,8 @@ func (e *OpenAIEmbedder) EmbedTexts(ctx context.Context, input EmbedInput) (*Emb
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("%w: status %d", ErrOpenAIEmbedder, resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return nil, fmt.Errorf("%w: status %d: %s", ErrOpenAIEmbedder, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
