@@ -69,9 +69,19 @@ func main() {
 	conversationHandler := handler.NewConversationHandler(conversationService)
 
 	memoryStore := memory.NewMySQLStore(mysqlDB)
-	memoryRetriever := memory.NewMySQLRetriever(memoryStore)
+	mysqlMemoryRetriever := memory.NewMySQLRetriever(memoryStore)
 
-	memoryIndexer, err := buildMemoryIndexer(context.Background(), client, cfg)
+	memoryRAG, err := buildMemoryRAGComponents(context.Background(), client, cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	memoryIndexer, err := buildMemoryIndexer(memoryRAG)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	memoryRetriever, err := buildMemoryRetriever(mysqlMemoryRetriever, memoryRAG)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -157,7 +167,17 @@ func main() {
 	}
 }
 
-func buildMemoryIndexer(ctx context.Context, client *http.Client, cfg config.Config) (memory.Indexer, error) {
+type memoryRAGComponents struct {
+	splitter segment.Splitter
+	embedder embed.Embedder
+	index    vector.Index
+}
+
+func buildMemoryRAGComponents(
+	ctx context.Context,
+	client *http.Client,
+	cfg config.Config,
+) (*memoryRAGComponents, error) {
 	if !cfg.MemoryRAGEnabled() {
 		return nil, nil
 	}
@@ -177,7 +197,30 @@ func buildMemoryIndexer(ctx context.Context, client *http.Client, cfg config.Con
 		return nil, err
 	}
 
-	return memory.NewVectorIndexer(splitter, embedder, index)
+	return &memoryRAGComponents{
+		splitter: splitter,
+		embedder: embedder,
+		index:    index,
+	}, nil
+}
+
+func buildMemoryIndexer(components *memoryRAGComponents) (memory.Indexer, error) {
+	if components == nil {
+		return nil, nil
+	}
+
+	return memory.NewVectorIndexer(components.splitter, components.embedder, components.index)
+}
+
+func buildMemoryRetriever(
+	fallback memory.Retriever,
+	components *memoryRAGComponents,
+) (memory.Retriever, error) {
+	if components == nil {
+		return fallback, nil
+	}
+
+	return memory.NewVectorRetriever(fallback, components.embedder, components.index)
 }
 
 func buildMemorySplitter(client *http.Client, cfg config.Config) (segment.Splitter, error) {

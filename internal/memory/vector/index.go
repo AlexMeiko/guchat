@@ -10,7 +10,17 @@ type Point struct {
 type SearchInput struct {
 	Vector []float32
 	Limit  int
-	Filter map[string]any
+	Filter *Filter
+}
+
+type Filter struct {
+	Must          []Condition
+	ShouldFilters []Filter
+}
+
+type Condition struct {
+	Key   string
+	Value any
 }
 
 type SearchHit struct {

@@ -62,7 +62,8 @@ type qdrantDeleteRequest struct {
 }
 
 type qdrantFilter struct {
-	Must []qdrantCondition `json:"must"`
+	Must   []qdrantCondition `json:"must,omitempty"`
+	Should []qdrantFilter    `json:"should,omitempty"`
 }
 
 type qdrantCondition struct {
@@ -315,32 +316,37 @@ func isQdrantAlreadyExists(err error) bool {
 		strings.Contains(strings.ToLower(qdrantErr.Body), "already exists")
 }
 
-func buildQdrantFilter(values map[string]any) *qdrantFilter {
-	if len(values) == 0 {
+func buildQdrantFilter(filter *Filter) *qdrantFilter {
+	if filter == nil {
 		return nil
 	}
 
-	filter := &qdrantFilter{
-		Must: make([]qdrantCondition, 0, len(values)),
-	}
+	result := &qdrantFilter{}
 
-	for key, value := range values {
-		key = strings.TrimSpace(key)
-		if key == "" || value == nil {
+	for _, item := range filter.Must {
+		key := strings.TrimSpace(item.Key)
+		if key == "" || item.Value == nil {
 			continue
 		}
 
-		filter.Must = append(filter.Must, qdrantCondition{
+		result.Must = append(result.Must, qdrantCondition{
 			Key: key,
 			Match: qdrantMatch{
-				Value: value,
+				Value: item.Value,
 			},
 		})
 	}
 
-	if len(filter.Must) == 0 {
+	for _, item := range filter.ShouldFilters {
+		converted := buildQdrantFilter(&item)
+		if converted != nil {
+			result.Should = append(result.Should, *converted)
+		}
+	}
+
+	if len(result.Must) == 0 && len(result.Should) == 0 {
 		return nil
 	}
 
-	return filter
+	return result
 }

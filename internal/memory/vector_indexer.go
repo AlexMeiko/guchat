@@ -112,6 +112,7 @@ func memoryIndexPayload(item entity.MemoryItem, seg segment.Segment, embeddingMo
 		"source_ref":       nullableStringPayload(item.SourceRef),
 		"source_title":     nullableStringPayload(item.SourceTitle),
 		"expires_at":       nullableTimePayload(item.ExpiresAt),
+		"updated_at":       item.UpdatedAt.Format(time.RFC3339Nano),
 		"segment_index":    seg.Index,
 		"modality":         seg.Modality,
 		"content":          seg.Content,
