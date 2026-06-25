@@ -72,6 +72,11 @@ func New(
 			adminModels.DELETE("/:id", modelHandler.Delete)
 		}
 
+		adminMemory := api.Group("/admin/memory", middleware.Auth(jwtService))
+		{
+			adminMemory.GET("/reindex", memoryHandler.GetReindexStatus)
+			adminMemory.POST("/reindex", memoryHandler.ReindexActive)
+		}
 	}
 
 	return r

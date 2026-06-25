@@ -124,6 +124,36 @@ func (s *MySQLStore) GetByID(ctx context.Context, userID int64, id int64) (*enti
 	return &memoryItem, nil
 }
 
+func (s *MySQLStore) ListForIndex(ctx context.Context, filter IndexListFilter) ([]entity.MemoryItem, error) {
+	const query = `
+SELECT *
+FROM memory_items
+WHERE id > ?
+  AND status = 'active'
+  AND (expires_at IS NULL OR expires_at > ?)
+ORDER BY id ASC
+LIMIT ?`
+
+	afterID := filter.AfterID
+	if afterID < 0 {
+		afterID = 0
+	}
+
+	var items []entity.MemoryItem
+	if err := s.db.SelectContext(
+		ctx,
+		&items,
+		query,
+		afterID,
+		time.Now(),
+		NormalizeLimit(filter.Limit, 100, 500),
+	); err != nil {
+		return nil, err
+	}
+
+	return items, nil
+}
+
 func (s *MySQLStore) UpdateStatus(ctx context.Context, userID int64, id int64, status string) (bool, error) {
 	const query = `UPDATE memory_items SET status = ? WHERE id = ? AND  owner_user_id = ? AND scope IN ('user', 'conversation')`
 

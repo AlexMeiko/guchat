@@ -89,9 +89,15 @@ type PromptFilter struct {
 	Limit      int
 }
 
+type IndexListFilter struct {
+	AfterID int64
+	Limit   int
+}
+
 type Store interface {
 	Create(ctx context.Context, item *entity.MemoryItem) error
 	List(ctx context.Context, filter ListFilter) ([]entity.MemoryItem, error)
+	ListForIndex(ctx context.Context, filter IndexListFilter) ([]entity.MemoryItem, error)
 	ListPrompt(ctx context.Context, filter PromptFilter) ([]entity.MemoryItem, error)
 	GetByID(ctx context.Context, userID int64, id int64) (*entity.MemoryItem, error)
 	UpdateStatus(ctx context.Context, userID int64, id int64, status string) (bool, error)

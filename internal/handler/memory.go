@@ -144,6 +144,24 @@ func (h *MemoryHandler) Delete(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+func (h *MemoryHandler) ReindexActive(c *gin.Context) {
+	state, err := h.memoryService.StartReindexActive(c.Request.Context())
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidMemoryInput) {
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "memory indexer is not configured"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: "internal server error"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, state)
+}
+
+func (h *MemoryHandler) GetReindexStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, h.memoryService.GetReindexState())
+}
+
 func toMemoryItemResponse(item entity.MemoryItem) model.MemoryItemResponse {
 	metadata := json.RawMessage(item.MetadataJSON)
 	if len(metadata) == 0 || !json.Valid(metadata) {

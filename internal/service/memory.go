@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/AlexMeiko/guchat/internal/entity"
@@ -16,6 +17,8 @@ import (
 
 var ErrMemoryItemNotFound = errors.New("memory item not found")
 var ErrInvalidMemoryInput = errors.New("invalid memory input")
+
+const reindexPageSize = 500
 
 var (
 	allowedPrivateMemoryScopes = []string{
@@ -69,6 +72,8 @@ type MemoryService struct {
 	memoryIndexer    memory.Indexer
 	memoryRetriever  memory.Retriever
 	conversationRepo *repository.ConversationRepository
+	reindexMu        sync.Mutex
+	reindexState     ReindexMemoryState
 }
 
 type CreateMemoryInput struct {
@@ -83,6 +88,15 @@ type CreateMemoryInput struct {
 	MetadataJSON   string
 	Confidence     float64
 	ExpiresAt      *time.Time
+}
+
+type ReindexMemoryState struct {
+	Running    bool       `json:"running"`
+	Indexed    int        `json:"indexed"`
+	Failed     int        `json:"failed"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	Error      string     `json:"error,omitempty"`
 }
 
 func NewMemoryService(
@@ -300,6 +314,95 @@ func (s *MemoryService) ListPromptMemories(
 		UserID: userID,
 		Limit:  limit,
 	})
+}
+
+func (s *MemoryService) StartReindexActive(ctx context.Context) (ReindexMemoryState, error) {
+	if s.memoryIndexer == nil {
+		return ReindexMemoryState{}, ErrInvalidMemoryInput
+	}
+	now := time.Now()
+
+	s.reindexMu.Lock()
+	if s.reindexState.Running {
+		state := s.reindexState
+		s.reindexMu.Unlock()
+		return state, nil
+	}
+
+	s.reindexState = ReindexMemoryState{
+		Running:   true,
+		StartedAt: &now,
+	}
+	state := s.reindexState
+	s.reindexMu.Unlock()
+
+	go s.runReindexActive(context.WithoutCancel(ctx))
+
+	return state, nil
+}
+
+func (s *MemoryService) GetReindexState() ReindexMemoryState {
+	s.reindexMu.Lock()
+	defer s.reindexMu.Unlock()
+
+	return s.reindexState
+}
+
+func (s *MemoryService) runReindexActive(ctx context.Context) {
+	err := s.reindexActive(ctx)
+
+	finishedAt := time.Now()
+	s.reindexMu.Lock()
+	s.reindexState.Running = false
+	s.reindexState.FinishedAt = &finishedAt
+	if err != nil {
+		s.reindexState.Error = err.Error()
+		log.Printf("memory reindex failed: error=%v", err)
+	}
+	s.reindexMu.Unlock()
+}
+
+func (s *MemoryService) reindexActive(ctx context.Context) error {
+	var afterID int64
+
+	for {
+		items, err := s.memoryStore.ListForIndex(ctx, memory.IndexListFilter{
+			AfterID: afterID,
+			Limit:   reindexPageSize,
+		})
+		if err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			return nil
+		}
+
+		for _, item := range items {
+			afterID = item.ID
+
+			if err := s.memoryIndexer.Index(ctx, item); err != nil {
+				log.Printf("memory reindex failed: memory_item_id=%d error=%v", item.ID, err)
+				s.incrementReindexFailed()
+				continue
+			}
+
+			s.incrementReindexIndexed()
+		}
+	}
+}
+
+func (s *MemoryService) incrementReindexIndexed() {
+	s.reindexMu.Lock()
+	defer s.reindexMu.Unlock()
+
+	s.reindexState.Indexed++
+}
+
+func (s *MemoryService) incrementReindexFailed() {
+	s.reindexMu.Lock()
+	defer s.reindexMu.Unlock()
+
+	s.reindexState.Failed++
 }
 
 func (s *MemoryService) updateStatus(ctx context.Context, userID int64, id int64, status string) error {
