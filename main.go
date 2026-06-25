@@ -168,9 +168,10 @@ func main() {
 }
 
 type memoryRAGComponents struct {
-	splitter segment.Splitter
-	embedder embed.Embedder
-	index    vector.Index
+	splitter            segment.Splitter
+	embedder            embed.Embedder
+	index               vector.Index
+	similarityThreshold *float64
 }
 
 func buildMemoryRAGComponents(
@@ -198,9 +199,10 @@ func buildMemoryRAGComponents(
 	}
 
 	return &memoryRAGComponents{
-		splitter: splitter,
-		embedder: embedder,
-		index:    index,
+		splitter:            splitter,
+		embedder:            embedder,
+		index:               index,
+		similarityThreshold: cfg.MemorySimilarityThreshold,
 	}, nil
 }
 
@@ -220,7 +222,7 @@ func buildMemoryRetriever(
 		return fallback, nil
 	}
 
-	return memory.NewVectorRetriever(fallback, components.embedder, components.index)
+	return memory.NewVectorRetriever(fallback, components.embedder, components.index, components.similarityThreshold)
 }
 
 func buildMemorySplitter(client *http.Client, cfg config.Config) (segment.Splitter, error) {

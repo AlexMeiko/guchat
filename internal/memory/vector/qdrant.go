@@ -76,10 +76,11 @@ type qdrantMatch struct {
 }
 
 type qdrantSearchRequest struct {
-	Vector      []float32     `json:"vector"`
-	Limit       int           `json:"limit"`
-	WithPayload bool          `json:"with_payload"`
-	Filter      *qdrantFilter `json:"filter,omitempty"`
+	Vector         []float32     `json:"vector"`
+	Limit          int           `json:"limit"`
+	WithPayload    bool          `json:"with_payload"`
+	Filter         *qdrantFilter `json:"filter,omitempty"`
+	ScoreThreshold *float64      `json:"score_threshold,omitempty"`
 }
 
 type qdrantSearchResponse struct {
@@ -87,6 +88,7 @@ type qdrantSearchResponse struct {
 }
 
 type qdrantSearchResult struct {
+	Score   float64        `json:"score"`
 	Payload map[string]any `json:"payload"`
 }
 
@@ -167,10 +169,11 @@ func (q *QdrantIndex) Search(ctx context.Context, input SearchInput) ([]SearchHi
 	}
 
 	req := qdrantSearchRequest{
-		Vector:      input.Vector,
-		Limit:       limit,
-		WithPayload: true,
-		Filter:      buildQdrantFilter(input.Filter),
+		Vector:         input.Vector,
+		Limit:          limit,
+		WithPayload:    true,
+		Filter:         buildQdrantFilter(input.Filter),
+		ScoreThreshold: input.SimilarityThreshold,
 	}
 
 	var resp qdrantSearchResponse
@@ -182,6 +185,7 @@ func (q *QdrantIndex) Search(ctx context.Context, input SearchInput) ([]SearchHi
 	hits := make([]SearchHit, 0, len(resp.Result))
 	for _, item := range resp.Result {
 		hits = append(hits, SearchHit{
+			Score:   item.Score,
 			Payload: item.Payload,
 		})
 	}

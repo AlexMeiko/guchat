@@ -63,22 +63,22 @@ func (p *BuiltinProvider) memoryToolDefinitions() []service.ToolDefinition {
 	return []service.ToolDefinition{
 		{
 			Name:        ToolSearchMemory,
-			Description: "搜索当前用户和当前会话可用的长期记忆、偏好、事实、约束、总结和知识。只有当历史信息可能有助于回答用户问题时才使用。",
+			Description: "搜索当前用户和当前会话可用的长期记忆、偏好、事实、约束、总结、知识和代码片段。当用户问题可能涉及个人信息、偏好、项目知识、文档、代码或先前记录，或你不确定是否保存过相关信息时使用。",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"query": {
 						"type": "string",
-						"description": "自然语言检索问题，用于表达这次要查找什么记忆或知识。"
+						"description": "自然语言检索问题，用于表达这次要查找什么记忆、知识或代码。可以描述意图、功能、逻辑或问题，不需要提供原文或代码片段。"
 					},
 					"keywords": {
 						"type": "array",
-						"description": "用于检索的关键词或短语数组。中文检索时应优先提供明确词语、实体名、项目名、概念名，而不是只传完整句子。",
+						"description": "可选的精确关键词或短语，用于辅助匹配专有名词、函数名、文件名、项目名、错误码、API 名称等。语义检索主要依赖 query；不确定时可以不传。",
 						"items": { "type": "string" }
 					},
 					"categories": {
 						"type": "array",
-						"description": "可选的记忆分类过滤，例如 preference、fact、knowledge、constraint、daily_summary。",
+						"description": "可选的记忆分类过滤，例如 user_profile、preference、fact、knowledge、goal、relationship、experience、daily_summary、constraint、negative_preference、situational。检索文档、知识或代码时通常使用 knowledge。",
 						"items": { "type": "string" }
 					},
 					"scopes": {
@@ -91,7 +91,7 @@ func (p *BuiltinProvider) memoryToolDefinitions() []service.ToolDefinition {
 						"description": "返回的最大条数。未传或小于等于 0 时使用后端默认值；当前最多返回 20 条。"
 					}
 				},
-				"required": ["query", "keywords"],
+				"required": ["query"],
 				"additionalProperties": false
 			}`),
 		},
@@ -107,7 +107,7 @@ func (p *BuiltinProvider) memoryToolDefinitions() []service.ToolDefinition {
 					},
 					"category": {
 						"type": "string",
-						"description": "记忆分类，例如 user_profile、preference、fact、knowledge、constraint、negative_preference、daily_summary、situational。缺省值 fact。constraint、negative_preference、user_profile、preference 的 user 记忆可能会在后续会话默认提供给模型，只用于长期稳定、跨会话普遍有用的信息；普通事实、知识、总结、短期状态不要放入这些分类。"
+						"description": "记忆分类，例如 user_profile、preference、fact、knowledge、goal、relationship、experience、daily_summary、constraint、negative_preference、situational。缺省值 fact。文档、知识点、代码片段、实现方案等可复用资料应使用 knowledge。constraint、negative_preference、user_profile、preference 的 user 记忆可能会在后续会话默认提供给模型，只用于长期稳定、跨会话普遍有用的信息；普通事实、知识、总结、短期状态不要放入这些分类。"
 					},
 					"source_type": {
 						"type": "string",
@@ -123,7 +123,7 @@ func (p *BuiltinProvider) memoryToolDefinitions() []service.ToolDefinition {
 					},
 					"content": {
 						"type": "string",
-						"description": "要保存的记忆正文，应简洁、明确、可复用。"
+						"description": "要保存的记忆正文，应简洁、明确、可复用。保存代码时保留关键标识符、语言信息和代码块格式。"
 					},
 					"confidence": {
 						"type": "number",
@@ -176,9 +176,6 @@ func (p *BuiltinProvider) searchMemory(ctx context.Context, user service.UserCon
 
 	if input.Query == "" {
 		return service.ToolResult{}, fmt.Errorf("query is required")
-	}
-	if len(input.Keywords) == 0 {
-		return service.ToolResult{}, fmt.Errorf("keywords is required")
 	}
 
 	hits, err := p.memoryService.SearchActive(

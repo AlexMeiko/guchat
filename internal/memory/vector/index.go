@@ -8,9 +8,10 @@ type Point struct {
 }
 
 type SearchInput struct {
-	Vector []float32
-	Limit  int
-	Filter *Filter
+	Vector              []float32
+	Limit               int
+	Filter              *Filter
+	SimilarityThreshold *float64
 }
 
 type Filter struct {
@@ -24,6 +25,7 @@ type Condition struct {
 }
 
 type SearchHit struct {
+	Score   float64
 	Payload map[string]any
 }
 

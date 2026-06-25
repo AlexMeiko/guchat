@@ -12,30 +12,31 @@ import (
 )
 
 type Config struct {
-	Port                    string
-	DatabaseURL             string
-	JWTSecret               string
-	JWTAccessTTL            int64
-	JWTRefreshTTL           int64
-	GenerationContextLimit  int
-	GenerationMaxToolRounds int
-	GenerationRetryInterval int64
-	GenerationRetryMax      int64
-	TavilyAPIKey            string
-	TavilyBaseURL           string
-	EmbeddingProvider       string
-	EmbeddingBaseURL        string
-	EmbeddingAPIKey         string
-	EmbeddingModel          string
-	EmbeddingDim            int
-	QdrantURL               string
-	QdrantAPIKey            string
-	QdrantCollection        string
-	QdrantDistance          string
-	RAGSplitterProvider     string
-	RAGSplitterAPIURL       string
-	RAGSplitterAPIHeaders   string
-	RAGSplitterSegmentsPath string
+	Port                      string
+	DatabaseURL               string
+	JWTSecret                 string
+	JWTAccessTTL              int64
+	JWTRefreshTTL             int64
+	GenerationContextLimit    int
+	GenerationMaxToolRounds   int
+	GenerationRetryInterval   int64
+	GenerationRetryMax        int64
+	TavilyAPIKey              string
+	TavilyBaseURL             string
+	EmbeddingProvider         string
+	EmbeddingBaseURL          string
+	EmbeddingAPIKey           string
+	EmbeddingModel            string
+	EmbeddingDim              int
+	QdrantURL                 string
+	QdrantAPIKey              string
+	QdrantCollection          string
+	QdrantDistance            string
+	MemorySimilarityThreshold *float64
+	RAGSplitterProvider       string
+	RAGSplitterAPIURL         string
+	RAGSplitterAPIHeaders     string
+	RAGSplitterSegmentsPath   string
 
 	MCPServers []MCPServerConfig
 }
@@ -71,32 +72,34 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	memorySimilarityThreshold := getOptionalEnvFloat64("MEMORY_SIMILARITY_THRESHOLD")
 
 	return Config{
-		Port:                    getEnv("PORT", "8080"),
-		DatabaseURL:             databaseURL,
-		JWTSecret:               jwtSecret,
-		JWTAccessTTL:            getEnvInt64("JWT_ACCESS_TTL_SECONDS", 3600),
-		JWTRefreshTTL:           getEnvInt64("JWT_REFRESH_TTL_SECONDS", 2592000),
-		GenerationContextLimit:  max(int(getEnvInt64("GENERATION_CONTEXT_LIMIT", 25)), 1),
-		GenerationMaxToolRounds: max(int(getEnvInt64("GENERATION_MAX_TOOL_ROUNDS", 12)), 1),
-		GenerationRetryInterval: max(getEnvInt64("GENERATION_RETRY_INTERVAL_SECONDS", 30), 1),
-		GenerationRetryMax:      max(getEnvInt64("GENERATION_RETRY_MAX", 5), 1),
-		TavilyAPIKey:            strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
-		TavilyBaseURL:           strings.TrimRight(strings.TrimSpace(getEnv("TAVILY_BASE_URL", defaultTavilyBaseURL)), "/"),
-		EmbeddingProvider:       strings.TrimSpace(os.Getenv("EMBEDDING_PROVIDER")),
-		EmbeddingBaseURL:        strings.TrimRight(strings.TrimSpace(os.Getenv("EMBEDDING_BASE_URL")), "/"),
-		EmbeddingAPIKey:         strings.TrimSpace(os.Getenv("EMBEDDING_API_KEY")),
-		EmbeddingModel:          strings.TrimSpace(os.Getenv("EMBEDDING_MODEL")),
-		EmbeddingDim:            int(max(getEnvInt64("EMBEDDING_DIM", 0), 0)),
-		QdrantURL:               strings.TrimRight(strings.TrimSpace(os.Getenv("QDRANT_URL")), "/"),
-		QdrantAPIKey:            strings.TrimSpace(os.Getenv("QDRANT_API_KEY")),
-		QdrantCollection:        strings.TrimSpace(os.Getenv("QDRANT_COLLECTION")),
-		QdrantDistance:          strings.TrimSpace(getEnv("QDRANT_DISTANCE", "Cosine")),
-		RAGSplitterProvider:     strings.TrimSpace(os.Getenv("RAG_SPLITTER_PROVIDER")),
-		RAGSplitterAPIURL:       strings.TrimSpace(os.Getenv("RAG_SPLITTER_API_URL")),
-		RAGSplitterAPIHeaders:   strings.TrimSpace(getEnv("RAG_SPLITTER_API_HEADERS_JSON", "{}")),
-		RAGSplitterSegmentsPath: strings.TrimSpace(getEnv("RAG_SPLITTER_API_SEGMENTS_PATH", "chunks")),
+		Port:                      getEnv("PORT", "8080"),
+		DatabaseURL:               databaseURL,
+		JWTSecret:                 jwtSecret,
+		JWTAccessTTL:              getEnvInt64("JWT_ACCESS_TTL_SECONDS", 3600),
+		JWTRefreshTTL:             getEnvInt64("JWT_REFRESH_TTL_SECONDS", 2592000),
+		GenerationContextLimit:    max(int(getEnvInt64("GENERATION_CONTEXT_LIMIT", 25)), 1),
+		GenerationMaxToolRounds:   max(int(getEnvInt64("GENERATION_MAX_TOOL_ROUNDS", 12)), 1),
+		GenerationRetryInterval:   max(getEnvInt64("GENERATION_RETRY_INTERVAL_SECONDS", 30), 1),
+		GenerationRetryMax:        max(getEnvInt64("GENERATION_RETRY_MAX", 5), 1),
+		TavilyAPIKey:              strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
+		TavilyBaseURL:             strings.TrimRight(strings.TrimSpace(getEnv("TAVILY_BASE_URL", defaultTavilyBaseURL)), "/"),
+		EmbeddingProvider:         strings.TrimSpace(os.Getenv("EMBEDDING_PROVIDER")),
+		EmbeddingBaseURL:          strings.TrimRight(strings.TrimSpace(os.Getenv("EMBEDDING_BASE_URL")), "/"),
+		EmbeddingAPIKey:           strings.TrimSpace(os.Getenv("EMBEDDING_API_KEY")),
+		EmbeddingModel:            strings.TrimSpace(os.Getenv("EMBEDDING_MODEL")),
+		EmbeddingDim:              int(max(getEnvInt64("EMBEDDING_DIM", 0), 0)),
+		QdrantURL:                 strings.TrimRight(strings.TrimSpace(os.Getenv("QDRANT_URL")), "/"),
+		QdrantAPIKey:              strings.TrimSpace(os.Getenv("QDRANT_API_KEY")),
+		QdrantCollection:          strings.TrimSpace(os.Getenv("QDRANT_COLLECTION")),
+		QdrantDistance:            strings.TrimSpace(getEnv("QDRANT_DISTANCE", "Cosine")),
+		MemorySimilarityThreshold: memorySimilarityThreshold,
+		RAGSplitterProvider:       strings.TrimSpace(os.Getenv("RAG_SPLITTER_PROVIDER")),
+		RAGSplitterAPIURL:         strings.TrimSpace(os.Getenv("RAG_SPLITTER_API_URL")),
+		RAGSplitterAPIHeaders:     strings.TrimSpace(getEnv("RAG_SPLITTER_API_HEADERS_JSON", "{}")),
+		RAGSplitterSegmentsPath:   strings.TrimSpace(getEnv("RAG_SPLITTER_API_SEGMENTS_PATH", "chunks")),
 
 		MCPServers: mcpServers,
 	}, nil
@@ -140,6 +143,21 @@ func getEnvInt64(key string, fallback int64) int64 {
 	}
 
 	return parsed
+}
+
+func getOptionalEnvFloat64(key string) *float64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return nil
+	}
+
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		log.Printf("warning: config %s=%q is invalid, expected a float, ignoring it", key, value)
+		return nil
+	}
+
+	return &parsed
 }
 
 func loadMCPServers() ([]MCPServerConfig, error) {

@@ -96,7 +96,7 @@ WHERE owner_user_id = ?
 	query += `
 ORDER BY updated_at DESC, id DESC
 LIMIT ? OFFSET ?`
-	args = append(args, normalizeLimit(filter.Limit, 50, 100), offset)
+	args = append(args, NormalizeLimit(filter.Limit, 50, 100), offset)
 
 	query, finalArgs, err := sqlx.In(query, args...)
 	if err != nil {
@@ -156,6 +156,11 @@ func (s *MySQLStore) Search(ctx context.Context, input SearchInput) ([]entity.Me
 
 	keywords := normalizeSearchKeywords(input.Keywords, 5)
 	if len(keywords) == 0 {
+		if query := strings.TrimSpace(input.Query); query != "" {
+			keywords = []string{query}
+		}
+	}
+	if len(keywords) == 0 {
 		return []entity.MemoryItem{}, nil
 	}
 
@@ -181,7 +186,7 @@ func (s *MySQLStore) Search(ctx context.Context, input SearchInput) ([]entity.Me
         updated_at DESC,
     	id DESC
     LIMIT ?`
-	args = append(args, normalizeLimit(input.Limit, 5, 20))
+	args = append(args, NormalizeLimit(input.Limit, 5, 20))
 
 	query, finalArgs, err := sqlx.In(query, args...)
 	if err != nil {
@@ -234,7 +239,7 @@ LIMIT ?`
 		filter.UserID,
 		time.Now(),
 		categories,
-		normalizeLimit(filter.Limit, 8, 15),
+		NormalizeLimit(filter.Limit, 8, 15),
 	}
 
 	query, finalArgs, err := sqlx.In(query, args...)
@@ -252,7 +257,7 @@ LIMIT ?`
 	return items, nil
 }
 
-func normalizeLimit(limit int, defaultLimit int, maxLimit int) int {
+func NormalizeLimit(limit int, defaultLimit int, maxLimit int) int {
 	if limit <= 0 {
 		return defaultLimit
 	}

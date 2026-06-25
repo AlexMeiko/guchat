@@ -16,16 +16,28 @@ import (
 var ErrInvalidRetrieverConfig = errors.New("invalid retriever config")
 
 type VectorRetriever struct {
-	fallback Retriever
-	embedder embed.Embedder
-	index    vector.Index
+	fallback            Retriever
+	embedder            embed.Embedder
+	index               vector.Index
+	similarityThreshold *float64
 }
 
-func NewVectorRetriever(fallback Retriever, embedder embed.Embedder, index vector.Index) (*VectorRetriever, error) {
+func NewVectorRetriever(
+	fallback Retriever,
+	embedder embed.Embedder,
+	index vector.Index,
+	similarityThreshold *float64,
+) (*VectorRetriever, error) {
 	if fallback == nil || embedder == nil || index == nil {
 		return nil, ErrInvalidRetrieverConfig
 	}
-	return &VectorRetriever{fallback: fallback, embedder: embedder, index: index}, nil
+
+	return &VectorRetriever{
+		fallback:            fallback,
+		embedder:            embedder,
+		index:               index,
+		similarityThreshold: similarityThreshold,
+	}, nil
 }
 
 func (r *VectorRetriever) Search(ctx context.Context, input SearchInput) ([]SearchHit, error) {
@@ -44,9 +56,10 @@ func (r *VectorRetriever) Search(ctx context.Context, input SearchInput) ([]Sear
 	}
 
 	hits, err := r.index.Search(ctx, vector.SearchInput{
-		Vector: result.Vectors[0],
-		Limit:  normalizeLimit(input.Limit, 5, 20),
-		Filter: buildVectorSearchFilter(input),
+		Vector:              result.Vectors[0],
+		Limit:               NormalizeLimit(input.Limit, 5, 20),
+		Filter:              buildVectorSearchFilter(input),
+		SimilarityThreshold: r.similarityThreshold,
 	})
 	if err != nil {
 		log.Printf("memory vector search failed: error=%v", err)
@@ -88,11 +101,12 @@ func vectorPayloadToSearchHit(payload map[string]any) (SearchHit, bool) {
 	}
 
 	item := entity.MemoryItem{
-		ID:        id,
-		Scope:     payloadString(payload, "scope"),
-		Category:  payloadString(payload, "category"),
-		Status:    payloadString(payload, "status"),
-		UpdatedAt: time.Time{},
+		ID:         id,
+		Scope:      payloadString(payload, "scope"),
+		Category:   payloadString(payload, "category"),
+		Status:     payloadString(payload, "status"),
+		Confidence: payloadFloat64(payload, "confidence", 1),
+		UpdatedAt:  time.Time{},
 	}
 
 	if ownerID, ok := payloadInt64(payload, "owner_user_id"); ok {
@@ -245,6 +259,24 @@ func payloadTime(payload map[string]any, key string) (time.Time, bool) {
 	}
 
 	return parsed, true
+}
+
+func payloadFloat64(payload map[string]any, key string, fallback float64) float64 {
+	value, ok := payload[key]
+	if !ok || value == nil {
+		return fallback
+	}
+
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	default:
+		return fallback
+	}
 }
 
 func containsString(values []string, value string) bool {

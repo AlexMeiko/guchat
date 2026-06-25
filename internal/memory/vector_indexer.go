@@ -108,6 +108,7 @@ func memoryIndexPayload(item entity.MemoryItem, seg segment.Segment, embeddingMo
 		"scope":            item.Scope,
 		"category":         item.Category,
 		"status":           item.Status,
+		"confidence":       item.Confidence,
 		"source_type":      item.SourceType,
 		"source_ref":       nullableStringPayload(item.SourceRef),
 		"source_title":     nullableStringPayload(item.SourceTitle),
