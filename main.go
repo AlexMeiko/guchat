@@ -255,6 +255,13 @@ func buildMemoryEmbedder(client *http.Client, cfg config.Config) (embed.Embedder
 			APIKey:  cfg.EmbeddingAPIKey,
 			Model:   cfg.EmbeddingModel,
 		})
+	case "dashscope":
+		return embed.NewDashScopeEmbedder(client, embed.DashScopeEmbedderConfig{
+			BaseURL: cfg.EmbeddingBaseURL,
+			APIKey:  cfg.EmbeddingAPIKey,
+			Model:   cfg.EmbeddingModel,
+			Dim:     cfg.EmbeddingDim,
+		})
 
 	default:
 		return nil, fmt.Errorf("unsupported embedding provider: %s", cfg.EmbeddingProvider)

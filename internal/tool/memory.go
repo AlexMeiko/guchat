@@ -73,7 +73,7 @@ func (p *BuiltinProvider) memoryToolDefinitions() []service.ToolDefinition {
 					},
 					"keywords": {
 						"type": "array",
-						"description": "可选的精确关键词或短语，用于辅助匹配专有名词、函数名、文件名、项目名、错误码、API 名称等。语义检索主要依赖 query；不确定时可以不传。",
+						"description": "可选的少量精确关键词或短语，只用于辅助匹配专有名词、函数名、文件名、项目名、错误码、API 名称等。不要堆词，也不要把自然语言整句拆成关键词；语义检索主要依赖 query，不确定时可以不传。",
 						"items": { "type": "string" }
 					},
 					"categories": {

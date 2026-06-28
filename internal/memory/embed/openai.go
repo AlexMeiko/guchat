@@ -55,13 +55,8 @@ func NewOpenAIEmbedder(client *http.Client, cfg OpenAIEmbedderConfig) (*OpenAIEm
 		client = http.DefaultClient
 	}
 
-	url := baseURL
-	if !strings.HasSuffix(url, "/embeddings") {
-		url += "/embeddings"
-	}
-
 	return &OpenAIEmbedder{
-		url:    url,
+		url:    baseURL,
 		apiKey: apiKey,
 		model:  model,
 		client: client,

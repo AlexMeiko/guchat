@@ -221,6 +221,14 @@ MCP_SERVERS=[{"name":"github","transport":"stdio","command":"npx","args":["-y","
 
 如果 `.env` 中需要把 `MCP_SERVERS` 写成多行 JSON，请用引号包住完整值。
 
+## 记忆 RAG 配置
+
+记忆向量检索是可选能力。完整配置 embedding、Qdrant 和外部切分 API 后，服务会写入和检索记忆向量索引；未完整配置时会回退到 MySQL 检索。
+
+`EMBEDDING_BASE_URL` 必须填写最终请求地址。OpenAI-compatible provider 示例为 `https://example.com/v1/embeddings`，DashScope 示例为 `https://<workspace-id>.cn-beijing.maas.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding`。
+
+`EMBEDDING_DIM` 会作为 Qdrant collection 的向量维度。DashScope provider 会把该值作为 `parameters.dimension` 传给上游；OpenAI-compatible provider 暂不传 `dimensions` 参数，只校验返回向量维度应与 Qdrant collection 配置一致。
+
 ## SSE 事件
 
 生成接口会创建 assistant 消息，客户端可订阅该消息的事件流：
