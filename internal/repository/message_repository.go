@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"sort"
+	"strings"
 
 	"github.com/AlexMeiko/guchat/internal/entity"
 	"github.com/jmoiron/sqlx"
@@ -24,12 +24,14 @@ func (r *MessageRepository) Create(ctx context.Context, message *entity.Message)
             id,
             conversation_id,
             role,
-            content,
-            reasoning_content,
-            status,
-            error_message,
-            seq
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			content,
+			reasoning_content,
+			summary_content,
+			has_summary,
+			status,
+			error_message,
+			seq
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := r.db.ExecContext(
@@ -40,6 +42,8 @@ func (r *MessageRepository) Create(ctx context.Context, message *entity.Message)
 		message.Role,
 		message.Content,
 		message.ReasoningContent,
+		message.SummaryContent,
+		message.HasSummary,
 		message.Status,
 		message.ErrorMessage,
 		message.Seq,
@@ -95,31 +99,51 @@ func (r *MessageRepository) ListByConversationIDBeforeOrEqualSeq(
 	return messages, nil
 }
 
-func (r *MessageRepository) ListGenerationContextByConversationID(
+func (r *MessageRepository) GetLatestSummaryBeforeOrEqualSeq(
 	ctx context.Context,
 	conversationID string,
 	seq int,
-	nonSystemContextLimit int,
-) ([]entity.Message, error) {
-	const systemQuery = `SELECT * FROM messages WHERE conversation_id = ? AND seq <= ? AND role = ?`
+) (*entity.Message, bool, error) {
+	const query = `
+		SELECT *
+		FROM messages
+		WHERE conversation_id = ?
+			AND has_summary = TRUE
+			AND seq <= ?
+		ORDER BY seq DESC
+		LIMIT 1
+	`
 
-	var systemMessages []entity.Message
-	if err := r.db.SelectContext(ctx, &systemMessages, systemQuery, conversationID, seq, entity.MessageRoleSystem); err != nil {
-		return nil, err
+	var message entity.Message
+	if err := r.db.GetContext(ctx, &message, query, conversationID, seq); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, err
 	}
+
+	return &message, true, nil
+}
+
+func (r *MessageRepository) ListByConversationIDAfterSeqBeforeOrEqualSeq(
+	ctx context.Context,
+	conversationID string,
+	afterSeq int,
+	beforeOrEqualSeq int,
+) ([]entity.Message, error) {
+	const query = `
+		SELECT *
+		FROM messages
+		WHERE conversation_id = ?
+			AND seq > ?
+			AND seq <= ?
+		ORDER BY seq ASC
+	`
 
 	var messages []entity.Message
-	if nonSystemContextLimit > 0 {
-		const userQuery = `SELECT * FROM messages WHERE conversation_id = ? AND seq <= ? AND role <> ? ORDER BY seq DESC LIMIT ?`
-		if err := r.db.SelectContext(ctx, &messages, userQuery, conversationID, seq, entity.MessageRoleSystem, nonSystemContextLimit); err != nil {
-			return nil, err
-		}
+	if err := r.db.SelectContext(ctx, &messages, query, conversationID, afterSeq, beforeOrEqualSeq); err != nil {
+		return nil, err
 	}
-
-	messages = append(messages, systemMessages...)
-	sort.Slice(messages, func(i, j int) bool {
-		return messages[i].Seq < messages[j].Seq
-	})
 
 	return messages, nil
 }
@@ -183,6 +207,84 @@ func (r *MessageRepository) UpdateContentByIDAndConversationID(ctx context.Conte
 	}
 
 	return n > 0, nil
+}
+
+func (r *MessageRepository) UpdateSummaryContentByIDAndConversationID(
+	ctx context.Context,
+	messageID string,
+	conversationID string,
+	summaryContent string,
+) (bool, error) {
+	const query = `
+		UPDATE messages
+		SET summary_content = ?, has_summary = ?
+		WHERE id = ? AND conversation_id = ?
+	`
+
+	hasSummary := strings.TrimSpace(summaryContent) != ""
+	result, err := r.db.ExecContext(ctx, query, summaryContent, hasSummary, messageID, conversationID)
+	if err != nil {
+		return false, err
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return n > 0, nil
+}
+
+func (r *MessageRepository) ClearSummaryContentFromSeq(ctx context.Context, conversationID string, seq int) error {
+	const query = `
+		UPDATE messages
+		SET summary_content = '', has_summary = FALSE
+		WHERE conversation_id = ? AND seq >= ? AND has_summary = TRUE
+	`
+
+	_, err := r.db.ExecContext(ctx, query, conversationID, seq)
+	return err
+}
+
+func (r *MessageRepository) ClearSummaryContentAfterSeq(ctx context.Context, conversationID string, seq int) error {
+	const query = `
+		UPDATE messages
+		SET summary_content = '', has_summary = FALSE
+		WHERE conversation_id = ? AND seq > ? AND has_summary = TRUE
+	`
+
+	_, err := r.db.ExecContext(ctx, query, conversationID, seq)
+	return err
+}
+
+func (r *MessageRepository) ClearSummaryContentFromMessageID(ctx context.Context, conversationID, messageID string) error {
+	const query = `
+		UPDATE messages AS target
+		JOIN messages AS anchor
+			ON anchor.id = ? AND anchor.conversation_id = ?
+		SET target.summary_content = '', target.has_summary = FALSE
+		WHERE target.conversation_id = ?
+			AND target.seq >= anchor.seq
+			AND target.has_summary = TRUE
+	`
+
+	_, err := r.db.ExecContext(ctx, query, messageID, conversationID, conversationID)
+	return err
+}
+
+func (r *MessageRepository) ClearSummaryContentAfterMessageID(ctx context.Context, conversationID, messageID string) error {
+	const query = `
+		UPDATE messages AS target
+		JOIN messages AS anchor
+			ON anchor.id = ? AND anchor.conversation_id = ?
+		SET target.summary_content = '', target.has_summary = FALSE
+		WHERE target.conversation_id = ?
+			AND target.seq > anchor.seq
+			AND target.has_summary = TRUE
+	`
+
+	_, err := r.db.ExecContext(ctx, query, messageID, conversationID, conversationID)
+	return err
 }
 
 func (r *MessageRepository) DeleteByIDAndConversationID(ctx context.Context, messageID, conversationID string) (bool, error) {

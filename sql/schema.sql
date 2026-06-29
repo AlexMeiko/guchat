@@ -44,11 +44,14 @@ CREATE TABLE messages
     role              VARCHAR(16)  NOT NULL,
     content           MEDIUMTEXT   NOT NULL,
     reasoning_content MEDIUMTEXT   NOT NULL,
+    summary_content   MEDIUMTEXT   NOT NULL,
+    has_summary       BOOLEAN      NOT NULL DEFAULT FALSE,
     status            VARCHAR(16)  NOT NULL DEFAULT 'done',
     error_message     TEXT         NOT NULL,
     seq               INT          NOT NULL,
     created_at        TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     UNIQUE KEY uq_messages_conversation_seq (conversation_id, seq),
+    KEY idx_messages_summary_anchor (conversation_id, has_summary, seq),
     CONSTRAINT fk_messages_conversation_id
         FOREIGN KEY (conversation_id) REFERENCES conversations (id)
             ON DELETE CASCADE

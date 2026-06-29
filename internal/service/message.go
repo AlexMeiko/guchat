@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/AlexMeiko/guchat/internal/entity"
 	"github.com/AlexMeiko/guchat/internal/repository"
@@ -22,9 +23,15 @@ type CreateMessageInput struct {
 	Role             string
 	Content          string
 	ReasoningContent string
+	SummaryContent   string
 	Status           string
 	ErrorMessage     string
 	PrevID           string
+}
+
+type GenerationContextResult struct {
+	SummaryContent string
+	Messages       []entity.Message
 }
 
 type ListMessagesPageInput struct {
@@ -83,6 +90,8 @@ func (s *MessageService) CreateMessage(ctx context.Context, userID int64, input 
 		Role:             input.Role,
 		Content:          input.Content,
 		ReasoningContent: input.ReasoningContent,
+		SummaryContent:   input.SummaryContent,
+		HasSummary:       strings.TrimSpace(input.SummaryContent) != "",
 		Status:           input.Status,
 		ErrorMessage:     input.ErrorMessage,
 		Seq:              seq,
@@ -90,6 +99,16 @@ func (s *MessageService) CreateMessage(ctx context.Context, userID int64, input 
 
 	if err := s.messageRepo.Create(ctx, message); err != nil {
 		return nil, err
+	}
+
+	if input.PrevID != "" {
+		if _, found, err := s.messageRepo.GetNextSeqByConversationIDAndSeq(ctx, input.ConversationID, message.Seq); err != nil {
+			return nil, err
+		} else if found {
+			if err := s.messageRepo.ClearSummaryContentAfterSeq(ctx, input.ConversationID, message.Seq); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	if err := s.conversationRepo.TouchByIDAndUserID(ctx, input.ConversationID, userID); err != nil {
@@ -157,18 +176,37 @@ func (s *MessageService) ListByConversationIDBeforeOrEqualSeq(
 	return s.messageRepo.ListByConversationIDBeforeOrEqualSeq(ctx, conversationID, seq)
 }
 
-func (s *MessageService) ListGenerationContextByConversationID(
+func (s *MessageService) ListGenerationContextWithSummaryByConversationID(
 	ctx context.Context,
 	userID int64,
 	conversationID string,
 	seq int,
-	nonSystemLimit int,
-) ([]entity.Message, error) {
+) (*GenerationContextResult, error) {
 	if err := s.ensureConversationOwned(ctx, userID, conversationID); err != nil {
 		return nil, err
 	}
 
-	return s.messageRepo.ListGenerationContextByConversationID(ctx, conversationID, seq, nonSystemLimit)
+	anchor, found, err := s.messageRepo.GetLatestSummaryBeforeOrEqualSeq(ctx, conversationID, seq)
+	if err != nil {
+		return nil, err
+	}
+
+	afterSeq := 0
+	summaryContent := ""
+	if found {
+		afterSeq = anchor.Seq
+		summaryContent = anchor.SummaryContent
+	}
+
+	messages, err := s.messageRepo.ListByConversationIDAfterSeqBeforeOrEqualSeq(ctx, conversationID, afterSeq, seq)
+	if err != nil {
+		return nil, err
+	}
+
+	return &GenerationContextResult{
+		SummaryContent: summaryContent,
+		Messages:       messages,
+	}, nil
 }
 
 func (s *MessageService) GetByIDAndConversationID(ctx context.Context, userID int64, conversationID, messageID string) (*entity.Message, error) {
@@ -202,6 +240,10 @@ func (s *MessageService) UpdateContentByIDAndConversationID(ctx context.Context,
 		return nil, ErrMessageNotFound
 	}
 
+	if err := s.messageRepo.ClearSummaryContentFromMessageID(ctx, conversationID, messageID); err != nil {
+		return nil, err
+	}
+
 	result, err := s.messageRepo.GetByIDAndConversationID(ctx, messageID, conversationID)
 	if err != nil {
 		return nil, err
@@ -210,8 +252,28 @@ func (s *MessageService) UpdateContentByIDAndConversationID(ctx context.Context,
 	return result, nil
 }
 
+func (s *MessageService) UpdateSummaryContentByIDAndConversationID(ctx context.Context, userID int64, conversationID, messageID, summaryContent string) error {
+	if err := s.ensureConversationOwned(ctx, userID, conversationID); err != nil {
+		return err
+	}
+
+	updated, err := s.messageRepo.UpdateSummaryContentByIDAndConversationID(ctx, messageID, conversationID, summaryContent)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return ErrMessageNotFound
+	}
+
+	return nil
+}
+
 func (s *MessageService) DeleteByIDAndConversationID(ctx context.Context, userID int64, conversationID, messageID string) error {
 	if err := s.ensureConversationOwned(ctx, userID, conversationID); err != nil {
+		return err
+	}
+
+	if err := s.messageRepo.ClearSummaryContentAfterMessageID(ctx, conversationID, messageID); err != nil {
 		return err
 	}
 

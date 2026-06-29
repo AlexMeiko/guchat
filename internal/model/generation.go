@@ -1,9 +1,8 @@
 package model
 
 type CreateGenerationRequest struct {
-	ModelID      int64  `json:"model_id" binding:"required"`
-	ContextLimit *int   `json:"context_limit"`
-	ToolMode     string `json:"tool_mode"`
+	ModelID  int64  `json:"model_id" binding:"required"`
+	ToolMode string `json:"tool_mode"`
 }
 
 type ToolCallEvent struct {

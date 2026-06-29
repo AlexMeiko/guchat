@@ -17,7 +17,8 @@ type Config struct {
 	JWTSecret                 string
 	JWTAccessTTL              int64
 	JWTRefreshTTL             int64
-	GenerationContextLimit    int
+	ContextTokenLimit         int
+	ContextCompressRatio      float64
 	GenerationMaxToolRounds   int
 	GenerationRetryInterval   int64
 	GenerationRetryMax        int64
@@ -73,6 +74,14 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	memorySimilarityThreshold := getOptionalEnvFloat64("MEMORY_SIMILARITY_THRESHOLD")
+	contextCompressRatio := getEnvFloat64("CONTEXT_COMPRESS_RATIO", 0.8)
+	if contextCompressRatio <= 0 || contextCompressRatio > 1 {
+		log.Printf(
+			"warning: config CONTEXT_COMPRESS_RATIO=%f is invalid, expected a value in (0, 1], using fallback value 0.800000",
+			contextCompressRatio,
+		)
+		contextCompressRatio = 0.8
+	}
 
 	return Config{
 		Port:                      getEnv("PORT", "8080"),
@@ -80,7 +89,8 @@ func Load() (Config, error) {
 		JWTSecret:                 jwtSecret,
 		JWTAccessTTL:              getEnvInt64("JWT_ACCESS_TTL_SECONDS", 3600),
 		JWTRefreshTTL:             getEnvInt64("JWT_REFRESH_TTL_SECONDS", 2592000),
-		GenerationContextLimit:    max(int(getEnvInt64("GENERATION_CONTEXT_LIMIT", 25)), 1),
+		ContextTokenLimit:         int(max(getEnvInt64("CONTEXT_TOKEN_LIMIT", 32000), 1)),
+		ContextCompressRatio:      contextCompressRatio,
 		GenerationMaxToolRounds:   max(int(getEnvInt64("GENERATION_MAX_TOOL_ROUNDS", 12)), 1),
 		GenerationRetryInterval:   max(getEnvInt64("GENERATION_RETRY_INTERVAL_SECONDS", 30), 1),
 		GenerationRetryMax:        max(getEnvInt64("GENERATION_RETRY_MAX", 5), 1),
@@ -139,6 +149,21 @@ func getEnvInt64(key string, fallback int64) int64 {
 			value,
 			fallback,
 		)
+		return fallback
+	}
+
+	return parsed
+}
+
+func getEnvFloat64(key string, fallback float64) float64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		log.Printf("warning: config %s=%q is invalid, expected a float, using fallback value %f", key, value, fallback)
 		return fallback
 	}
 
