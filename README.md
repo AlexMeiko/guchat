@@ -1,16 +1,18 @@
-# guchat-go
+# guchat
 
-`guchat-go` 是一个使用 Go + Gin 实现的 AI 聊天后端服务，提供用户鉴权、会话管理、消息管理、模型配置、AI 流式生成与 SSE 事件推送能力。项目目标是用清晰的分层结构实现一个可运行、可联调、便于扩展的聊天后端。
+`guchat` 是一个使用 Go + Gin 实现的 AI 聊天后端服务，提供用户鉴权、会话管理、消息管理、模型配置、AI 流式生成、工具调用、记忆 RAG、上下文摘要压缩与 SSE 事件推送能力。项目目标是用清晰的分层结构实现一个可运行、可联调、便于维护的聊天后端。
 
 ## 功能特性
 
 - 支持用户注册、登录、Token 刷新与登出
 - 支持会话管理、消息管理和历史消息分页加载
-- 支持 AI 回复生成、流式输出和生成中取消
-- 支持 SSE 实时推送正文增量、推理增量和生成状态
+- 支持 AI 回复生成、流式输出、生成中取消和生成任务恢复重试
+- 支持上下文摘要压缩，长对话生成时会使用摘要锚点和必要原始消息构造上下文
+- 支持 SSE 实时推送正文增量、推理增量、工具调用状态和生成状态
 - 支持 OpenAI Chat Completions、Responses API 和本地 `fake` 生成器
 - 支持模型配置管理，可动态启用或停用模型
-- 支持内置工具调用和 MCP 工具扩展，MCP 可通过 HTTP 或 stdio 接入
+- 支持内置工具调用、记忆工具和 MCP 工具扩展，MCP 可通过 HTTP 或 stdio 接入
+- 支持私有记忆管理、基础记忆默认注入、MySQL 记忆检索和可选 Qdrant 向量检索
 - 采用 Handler / Service / Repository 分层结构，便于维护和扩展
 
 ## 技术栈
@@ -33,6 +35,7 @@
 │   ├── entity                 # 数据库实体
 │   ├── generator              # 生成器
 │   ├── handler                # HTTP Handler
+│   ├── memory                 # 记忆存储、切分、嵌入和向量索引
 │   ├── middleware             # 鉴权中间件
 │   ├── model                  # 请求/响应模型
 │   ├── repository             # 数据访问层
@@ -62,11 +65,11 @@
 
 ```bash
 git clone https://github.com/AlexMeiko/guchat.git
-cd guchat-go
+cd guchat
 go mod download
 ```
 
-如果仓库目录名不是 `guchat-go`，请以实际目录为准。
+如果仓库目录名不同，请以实际目录为准。
 
 ### 3. 初始化数据库
 
@@ -104,8 +107,25 @@ JWT_ACCESS_TTL_SECONDS=3600
 JWT_REFRESH_TTL_SECONDS=2592000
 GENERATION_RETRY_INTERVAL_SECONDS=30
 GENERATION_RETRY_MAX=5
+CONTEXT_TOKEN_LIMIT=256000
+CONTEXT_COMPRESS_RATIO=0.8
+GENERATION_MAX_TOOL_ROUNDS=12
 TAVILY_API_KEY=
 TAVILY_BASE_URL=https://api.tavily.com
+EMBEDDING_PROVIDER=openai
+EMBEDDING_BASE_URL=
+EMBEDDING_API_KEY=
+EMBEDDING_MODEL=
+EMBEDDING_DIM=0
+QDRANT_URL=
+QDRANT_API_KEY=
+QDRANT_COLLECTION=
+QDRANT_DISTANCE=Cosine
+MEMORY_SIMILARITY_THRESHOLD=
+RAG_SPLITTER_PROVIDER=external_api
+RAG_SPLITTER_API_URL=
+RAG_SPLITTER_API_HEADERS_JSON={}
+RAG_SPLITTER_API_SEGMENTS_PATH=chunks
 MCP_SERVERS=
 ```
 
@@ -151,11 +171,22 @@ Authorization: Bearer <access_token>
 | 会话 | `POST /api/conversations` | 创建会话 |
 | 消息 | `GET /api/conversations/:conversation_id/messages` | 分页获取消息 |
 | 消息 | `POST /api/conversations/:conversation_id/messages` | 创建消息 |
+| 消息 | `GET /api/conversations/:conversation_id/messages/:message_id` | 获取单条消息 |
+| 消息 | `PATCH /api/conversations/:conversation_id/messages/:message_id` | 更新消息正文 |
+| 消息 | `DELETE /api/conversations/:conversation_id/messages/:message_id` | 删除消息 |
 | 生成 | `POST /api/conversations/:conversation_id/messages/:message_id/generation` | 触发 AI 回复生成 |
 | 生成 | `GET /api/conversations/:conversation_id/messages/:message_id/events` | 订阅 SSE 事件 |
+| 记忆 | `GET /api/memory` | 获取当前用户可管理的私有记忆 |
+| 记忆 | `PATCH /api/memory/:id/status` | 更新记忆状态 |
+| 记忆 | `DELETE /api/memory/:id` | 删除记忆 |
+| 记忆索引 | `GET /api/admin/memory/reindex` | 获取记忆重建任务状态，需登录 |
+| 记忆索引 | `POST /api/admin/memory/reindex` | 启动 active 记忆全量重建，需登录 |
 | 模型 | `GET /api/models` | 获取已启用模型 |
 | 模型管理 | `GET /api/admin/models` | 获取全部模型，需 admin |
 | 模型管理 | `POST /api/admin/models` | 创建模型，需 admin |
+| 模型管理 | `GET /api/admin/models/:id` | 获取单个模型，需 admin |
+| 模型管理 | `PATCH /api/admin/models/:id` | 更新模型，需 admin |
+| 模型管理 | `DELETE /api/admin/models/:id` | 删除模型，需 admin |
 
 完整接口说明见 `docs/api.md`。
 
@@ -194,7 +225,12 @@ curl -X POST "http://localhost:8080/api/admin/models" \
 
 - `get_current_time`：获取指定 IANA 时区的当前时间
 - `read_web_page`：读取公开网页正文
+- `search_memory`：搜索当前用户、当前会话和公共范围内的 active 记忆或知识
+- `add_memory`：写入当前用户的 user / conversation scope 记忆
+- `disable_memory`：禁用当前用户自己的 user / conversation scope 记忆
 - `tavily_search`：配置 `TAVILY_API_KEY` 后启用 Tavily 搜索
+
+生成接口的 `tool_mode` 支持 `auto` 和 `none`。`tool_mode=auto` 时，后端会向模型提供当前可用的内置工具和 MCP 工具；`tool_mode=none` 时，本次生成不提供工具。
 
 外部 MCP 服务通过环境变量 `MCP_SERVERS` 配置。它是一个 JSON 数组，每个元素表示一个 MCP 服务；`name` 会作为工具名前缀，例如 MCP 服务返回 `tavily_extract` 时，最终暴露为 `tavily.tavily_extract`。
 
@@ -221,13 +257,66 @@ MCP_SERVERS=[{"name":"github","transport":"stdio","command":"npx","args":["-y","
 
 如果 `.env` 中需要把 `MCP_SERVERS` 写成多行 JSON，请用引号包住完整值。
 
-## 记忆 RAG 配置
+## 记忆与 RAG 配置
 
-记忆向量检索是可选能力。完整配置 embedding、Qdrant 和外部切分 API 后，服务会写入和检索记忆向量索引；未完整配置时会回退到 MySQL 检索。
+`/api/memory` 用于管理当前用户自己的 `user` / `conversation` scope 私有记忆；不返回 `global` 记忆，也不提供公共创建接口。对话生成时，后端会默认注入少量 active、未过期、scope=user 的基础记忆，分类包括 `constraint`、`negative_preference`、`user_profile`、`preference`。
 
-`EMBEDDING_BASE_URL` 必须填写最终请求地址。OpenAI-compatible provider 示例为 `https://example.com/v1/embeddings`，DashScope 示例为 `https://<workspace-id>.cn-beijing.maas.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding`。
+生成过程中，模型可通过内置工具按需检索或写入记忆：
+
+- `search_memory`：检索当前用户、当前会话和公共范围内的 active 记忆或知识
+- `add_memory`：保存当前用户的 user / conversation scope 记忆
+- `disable_memory`：禁用当前用户自己的私有记忆
+
+记忆检索默认可使用 MySQL。记忆向量检索是可选能力，完整配置 embedding、Qdrant 和外部切分 API 后，服务会写入和检索记忆向量索引；未完整配置时会回退到 MySQL 检索。
+
+已存在 active 记忆可通过 `POST /api/admin/memory/reindex` 启动异步全量重建，通过 `GET /api/admin/memory/reindex` 查询任务状态。当前这两个接口要求已登录。
+
+`EMBEDDING_BASE_URL` 必须填写最终请求地址。示例：
+
+> OpenAI-compatible provider：`https://example.com/v1/embeddings`
+>
+> DashScope provider：`https://<workspace-id>.cn-beijing.maas.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding`
 
 `EMBEDDING_DIM` 会作为 Qdrant collection 的向量维度。DashScope provider 会把该值作为 `parameters.dimension` 传给上游；OpenAI-compatible provider 暂不传 `dimensions` 参数，只校验返回向量维度应与 Qdrant collection 配置一致。
+
+外部切分 API 当前使用 `RAG_SPLITTER_PROVIDER=external_api`。guchat 会把待入库文本以 `POST` 请求发送到 `RAG_SPLITTER_API_URL`，请求体固定为：
+
+```json
+{
+  "text": "待切分文本"
+}
+```
+
+服务端响应需要是 JSON，guchat 会从 `RAG_SPLITTER_API_SEGMENTS_PATH` 指定的字段路径读取分段数组；默认路径是 `chunks`，表示读取响应里的 `chunks` 字段。如果响应结构是 `{"data":{"chunks":[]}}`，则应配置为 `data.chunks`。分段数组可以是字符串数组，也可以是对象数组：
+
+```json
+{
+  "chunks": [
+    "第一段内容",
+    {
+      "text": "第二段内容",
+      "start": 10,
+      "end": 20
+    }
+  ]
+}
+```
+
+对象形式中 `text` 必填；`start` 和 `end` 可选，但如果出现必须同时出现，并表示原文中的非负整数偏移。
+
+如果切分服务需要鉴权或自定义请求头，可通过 `RAG_SPLITTER_API_HEADERS_JSON` 配置 JSON 对象，里面的键值会作为 HTTP Header 发送给切分服务。
+
+语义切分服务可使用我的另一个项目 [GuChunk-v1](https://modelscope.cn/models/tanhao2015/GuChunk-v1) 部署后接入；它是基于 Char CNN/TCN + BiLSTM 的轻量中文 RAG 语义分块模型，用于长文档知识库切片。只要返回分段数组路径与 `RAG_SPLITTER_API_SEGMENTS_PATH` 配置一致即可。
+
+## 上下文压缩
+
+生成前会以源消息为截止点构造上下文。服务会使用最近的摘要锚点和必要原始消息；当上下文估算 token 数达到 `CONTEXT_TOKEN_LIMIT * CONTEXT_COMPRESS_RATIO` 时，会对较早历史写入摘要 checkpoint。
+
+相关配置：
+
+- `CONTEXT_TOKEN_LIMIT`：上下文 token 上限，默认 `32000`
+- `CONTEXT_COMPRESS_RATIO`：摘要压缩触发比例，默认 `0.8`，有效范围 `(0, 1]`
+- `GENERATION_MAX_TOOL_ROUNDS`：单次生成最大工具调用轮次，默认 `12`
 
 ## SSE 事件
 
@@ -243,6 +332,8 @@ curl -N "http://localhost:8080/api/conversations/<conversation_id>/messages/<ass
 - `message.snapshot`：当前消息快照
 - `message.delta`：正文增量
 - `message.reasoning_delta`：推理内容增量
+- `tool_call.created`：工具调用创建
+- `tool_call.updated`：工具调用状态更新
 - `message.completed`：生成完成
 - `message.failed`：生成失败
 
