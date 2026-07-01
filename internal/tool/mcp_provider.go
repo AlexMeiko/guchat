@@ -23,6 +23,8 @@ const (
 	MCPAuthNone   string = "none"
 	MCPAuthQuery  string = "query"
 	MCPAuthHeader string = "header"
+
+	MCPToolNameSeparator = "-"
 )
 
 const MCPProtocolVersion = "2025-11-25"
@@ -126,7 +128,7 @@ func (p *MCPProvider) Name() string {
 }
 
 func (p *MCPProvider) CallTool(ctx context.Context, user service.UserContext, name string, args json.RawMessage) (service.ToolResult, error) {
-	remoteName, ok := strings.CutPrefix(name, p.name+".")
+	remoteName, ok := strings.CutPrefix(name, p.name+MCPToolNameSeparator)
 	if !ok || remoteName == "" {
 		return service.ToolResult{}, service.ErrToolNotFound
 	}
@@ -166,7 +168,7 @@ func (p *MCPProvider) ListTools(ctx context.Context, user service.UserContext) (
 		}
 
 		tools = append(tools, service.ToolDefinition{
-			Name:        p.name + "." + tool.Name,
+			Name:        p.name + MCPToolNameSeparator + tool.Name,
 			Description: tool.Description,
 			Parameters:  tool.InputSchema,
 		})

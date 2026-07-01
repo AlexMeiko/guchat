@@ -64,15 +64,6 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 		return
 	}
 
-	contextLimit := 0
-	if req.ContextLimit != nil {
-		if *req.ContextLimit <= 0 {
-			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid context limit"})
-			return
-		}
-		contextLimit = *req.ContextLimit
-	}
-
 	toolMode := req.ToolMode
 	if toolMode == "" {
 		toolMode = service.ToolModeAuto
@@ -94,7 +85,6 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 		ConversationID:  conversationID,
 		SourceMessageID: messageID,
 		ModelID:         req.ModelID,
-		ContextLimit:    contextLimit,
 		ToolMode:        toolMode,
 	})
 	if err != nil {

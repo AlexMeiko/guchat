@@ -11,6 +11,7 @@ func New(
 	authHandler *handler.AuthHandler,
 	conversationHandler *handler.ConversationHandler,
 	messageHandler *handler.MessageHandler,
+	memoryHandler *handler.MemoryHandler,
 	modelHandler *handler.ModelHandler,
 	generationHandler *handler.GenerationHandler,
 	jwtService *service.JWTService,
@@ -50,6 +51,13 @@ func New(
 
 		}
 
+		memoryGroup := api.Group("/memory", middleware.Auth(jwtService))
+		{
+			memoryGroup.GET("", memoryHandler.List)
+			memoryGroup.PATCH("/:id/status", memoryHandler.UpdateStatus)
+			memoryGroup.DELETE("/:id", memoryHandler.Delete)
+		}
+
 		models := api.Group("/models", middleware.Auth(jwtService))
 		{
 			models.GET("", modelHandler.ListEnabled)
@@ -64,6 +72,11 @@ func New(
 			adminModels.DELETE("/:id", modelHandler.Delete)
 		}
 
+		adminMemory := api.Group("/admin/memory", middleware.Auth(jwtService))
+		{
+			adminMemory.GET("/reindex", memoryHandler.GetReindexStatus)
+			adminMemory.POST("/reindex", memoryHandler.ReindexActive)
+		}
 	}
 
 	return r

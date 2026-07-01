@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,13 +22,16 @@ var (
 const (
 	ToolModeNone = "none"
 	ToolModeAuto = "auto"
+
+	promptMemoryLimit = 15
 )
+
+const compressedContextPrompt = "以下是此前对话的压缩摘要。请把它作为连续上下文使用，但如果它与后续原始消息冲突，以后续原始消息为准。\n\n"
 
 type CreateGenerationInput struct {
 	ConversationID  string
 	SourceMessageID string
 	ModelID         int64
-	ContextLimit    int
 	ToolMode        string
 }
 
@@ -39,17 +43,19 @@ type generationRetryItem struct {
 }
 
 type GenerationService struct {
-	messageService      *MessageService
-	modelService        *ModelService
-	generatorFactory    GeneratorFactory
-	runtimeManager      *stream.Manager
-	toolProviderManager *ToolProviderManager
-	toolCallRepo        *repository.ToolCallRepository
-	generationRoundRepo *repository.GenerationRoundRepository
-	defaultContextLimit int
-	maxToolRounds       int
-	retryInterval       time.Duration
-	retryMax            int
+	messageService       *MessageService
+	modelService         *ModelService
+	memoryService        *MemoryService
+	generatorFactory     GeneratorFactory
+	runtimeManager       *stream.Manager
+	toolProviderManager  *ToolProviderManager
+	toolCallRepo         *repository.ToolCallRepository
+	generationRoundRepo  *repository.GenerationRoundRepository
+	contextTokenLimit    int
+	contextCompressRatio float64
+	maxToolRounds        int
+	retryInterval        time.Duration
+	retryMax             int
 
 	retryMu    sync.Mutex
 	retryItems map[string]*generationRetryItem
@@ -63,29 +69,33 @@ func newGeneratedToolCallID(assistantMessageID string, round int, seq int) strin
 func NewGenerationService(
 	messageService *MessageService,
 	modelService *ModelService,
+	memoryService *MemoryService,
 	generatorFactory GeneratorFactory,
 	runtimeManager *stream.Manager,
 	toolProviderManager *ToolProviderManager,
 	toolCallRepo *repository.ToolCallRepository,
 	generationRoundRepo *repository.GenerationRoundRepository,
-	defaultContextLimit int,
+	contextTokenLimit int,
+	contextCompressRatio float64,
 	maxToolRounds int,
 	retryInterval time.Duration,
 	retryMax int,
 ) *GenerationService {
 	return &GenerationService{
-		messageService:      messageService,
-		modelService:        modelService,
-		generatorFactory:    generatorFactory,
-		runtimeManager:      runtimeManager,
-		toolProviderManager: toolProviderManager,
-		toolCallRepo:        toolCallRepo,
-		generationRoundRepo: generationRoundRepo,
-		defaultContextLimit: defaultContextLimit,
-		maxToolRounds:       maxToolRounds,
-		retryInterval:       retryInterval,
-		retryMax:            retryMax,
-		retryItems:          make(map[string]*generationRetryItem),
+		messageService:       messageService,
+		modelService:         modelService,
+		memoryService:        memoryService,
+		generatorFactory:     generatorFactory,
+		runtimeManager:       runtimeManager,
+		toolProviderManager:  toolProviderManager,
+		toolCallRepo:         toolCallRepo,
+		generationRoundRepo:  generationRoundRepo,
+		contextTokenLimit:    contextTokenLimit,
+		contextCompressRatio: contextCompressRatio,
+		maxToolRounds:        maxToolRounds,
+		retryInterval:        retryInterval,
+		retryMax:             retryMax,
+		retryItems:           make(map[string]*generationRetryItem),
 	}
 }
 
@@ -100,6 +110,26 @@ func newGenerateMessages(messages []entity.Message) []GenerateMessage {
 		})
 	}
 	return result
+}
+
+func newSummaryGenerateMessage(summaryContent string) *GenerateMessage {
+	summaryContent = strings.TrimSpace(summaryContent)
+	if summaryContent == "" {
+		return nil
+	}
+
+	return &GenerateMessage{
+		Role:    entity.MessageRoleSystem,
+		Content: compressedContextPrompt + summaryContent,
+	}
+}
+
+func (s *GenerationService) contextCompressTriggerTokens() int {
+	triggerTokens := int(float64(s.contextTokenLimit) * s.contextCompressRatio)
+	if triggerTokens < 1 {
+		return 1
+	}
+	return triggerTokens
 }
 
 func (s *GenerationService) Create(
@@ -142,10 +172,6 @@ func (s *GenerationService) Create(
 	processCtx, cancel := context.WithCancel(context.Background())
 	s.runtimeManager.Create(assistantMsg.ID, cancel)
 
-	if input.ContextLimit <= 0 {
-		input.ContextLimit = s.defaultContextLimit
-	}
-
 	go func() {
 		_ = s.Process(
 			processCtx,
@@ -154,7 +180,6 @@ func (s *GenerationService) Create(
 			assistantMsg.ID,
 			sourceMessage.Seq,
 			input.ModelID,
-			input.ContextLimit,
 			input.ToolMode,
 		)
 	}()
@@ -169,7 +194,6 @@ func (s *GenerationService) Process(
 	assistantMessageID string,
 	sourceMessageSeq int,
 	modelID int64,
-	userContextLimit int,
 	toolMode string,
 ) error {
 	task, ok := s.runtimeManager.Get(assistantMessageID)
@@ -210,19 +234,18 @@ func (s *GenerationService) Process(
 		return fail(ErrModelDisabled)
 	}
 
-	messages, err := s.messageService.ListGenerationContextByConversationID(
+	generationContext, err := s.messageService.ListGenerationContextWithSummaryByConversationID(
 		ctx,
 		userID,
 		conversationID,
 		sourceMessageSeq,
-		userContextLimit,
 	)
 	if err != nil {
 		return fail(err)
 	}
 
 	// 开始构造带工具的上下文
-	generateMessages := newGenerateMessages(messages)
+	generateMessages := newGenerateMessages(generationContext.Messages)
 
 	// 查询每条信息调用过的工具，并把工具调用结果构造成工具交换记录放到上下文里面
 	assistantMessageIDs := make([]string, 0)
@@ -250,6 +273,20 @@ func (s *GenerationService) Process(
 		generateMessages[i].GenerationRounds = generationRoundsByMessageID[generateMessages[i].ID]
 	}
 
+	workingSummary := generationContext.SummaryContent
+
+	// 记忆注入
+	var promptMemoryMessage *GenerateMessage
+
+	if s.memoryService != nil {
+		promptMemories, err := s.memoryService.ListPromptMemories(ctx, userID, promptMemoryLimit)
+		if err != nil {
+			return fail(err)
+		}
+
+		promptMemoryMessage = newPromptMemoryMessage(promptMemories, toolMode)
+	}
+
 	generator, err := s.generatorFactory.Get(modelConfig)
 	if err != nil {
 		return fail(err)
@@ -263,6 +300,65 @@ func (s *GenerationService) Process(
 		if err != nil {
 			return fail(err)
 		}
+	}
+
+	triggerTokens := s.contextCompressTriggerTokens()
+	toolsTokens := estimateToolDefinitionsTokens(tools)
+	memoryTokens := 0
+	if promptMemoryMessage != nil {
+		memoryTokens = estimateGenerateMessageTokens(*promptMemoryMessage)
+	}
+
+	summaryTokens := 0
+	if summaryMessage := newSummaryGenerateMessage(workingSummary); summaryMessage != nil {
+		summaryTokens = estimateGenerateMessageTokens(*summaryMessage)
+	}
+
+	buffer := make([]GenerateMessage, 0, len(generateMessages))
+	bufferTokens := 0
+
+	for _, nextMessage := range generateMessages {
+		nextTokens := estimateGenerateMessageTokens(nextMessage)
+
+		if toolsTokens+memoryTokens+summaryTokens+bufferTokens+nextTokens > triggerTokens && len(buffer) > 0 {
+			summary, err := generateSummary(ctx, generator, modelConfig, workingSummary, buffer)
+			if err != nil {
+				return fail(err)
+			}
+
+			last := buffer[len(buffer)-1]
+			if err := s.messageService.UpdateSummaryContentByIDAndConversationID(
+				ctx,
+				userID,
+				conversationID,
+				last.ID,
+				summary,
+			); err != nil {
+				return fail(err)
+			}
+
+			workingSummary = summary
+			summaryTokens = 0
+			if summaryMessage := newSummaryGenerateMessage(workingSummary); summaryMessage != nil {
+				summaryTokens = estimateGenerateMessageTokens(*summaryMessage)
+			}
+
+			buffer = buffer[:0]
+			bufferTokens = 0
+		}
+
+		buffer = append(buffer, nextMessage)
+		bufferTokens += nextTokens
+	}
+
+	generateMessages = buffer
+
+	if summaryMessage := newSummaryGenerateMessage(workingSummary); summaryMessage != nil {
+		generateMessages = append([]GenerateMessage{*summaryMessage}, generateMessages...)
+	}
+
+	if promptMemoryMessage != nil {
+		generateMessages = append([]GenerateMessage{*promptMemoryMessage}, generateMessages...)
 	}
 
 	task.Start()
@@ -383,13 +479,12 @@ func (s *GenerationService) Process(
 			}
 			task.UpdateToolCallRunning(record.ID)
 
-			toolResult, toolErr := s.toolProviderManager.CallTool(ctx, UserContext{UserID: userID}, modelCall.Name, modelCall.Arguments)
+			toolResult, toolErr := s.toolProviderManager.CallTool(ctx, UserContext{UserID: userID, ConversationID: conversationID}, modelCall.Name, modelCall.Arguments)
 
 			if toolErr != nil {
 				toolErrorMessage := toolErr.Error()
 				//工具执行失败
 				payload, marshalErr := json.Marshal(map[string]any{
-					"ok":    false,
 					"error": toolErrorMessage,
 				})
 				if marshalErr != nil {
@@ -584,6 +679,36 @@ func groupGenerationRoundsByMessageID(records []entity.GenerationRound) map[stri
 	}
 
 	return result
+}
+
+func newPromptMemoryMessage(items []entity.MemoryItem, toolMode string) *GenerateMessage {
+	if len(items) == 0 && toolMode != ToolModeAuto {
+		return nil
+	}
+
+	var lines []string
+
+	if len(items) > 0 {
+		lines = append(lines, "以下是当前用户的长期偏好和用户画像记忆。请在回答时自然遵守，不要主动说明这些记忆的存在。")
+		for _, item := range items {
+			lines = append(lines, "- "+strings.TrimSpace(item.Content))
+		}
+	}
+
+	if toolMode == ToolModeAuto {
+		lines = append(lines, "如果需要更多历史记忆、偏好、事实、总结或知识，可以调用 search_memory。")
+		lines = append(lines, "当用户明确要求记住信息，或当前对话产生了长期有用的信息时，可以调用 add_memory。")
+		lines = append(lines, "当用户明确要求忘记、不要再记住、禁用某条记忆，或明确纠正已保存记忆时，先用 search_memory 找到对应私有记忆 ID，再调用 disable_memory；调用后不要再依据或复述该记忆。")
+	}
+
+	if len(lines) == 0 {
+		return nil
+	}
+
+	return &GenerateMessage{
+		Role:    entity.MessageRoleSystem,
+		Content: strings.Join(lines, "\n"),
+	}
 }
 
 func (s *GenerationService) removeRetry(messageID string) {

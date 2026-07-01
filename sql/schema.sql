@@ -44,11 +44,14 @@ CREATE TABLE messages
     role              VARCHAR(16)  NOT NULL,
     content           MEDIUMTEXT   NOT NULL,
     reasoning_content MEDIUMTEXT   NOT NULL,
+    summary_content   MEDIUMTEXT   NOT NULL,
+    has_summary       BOOLEAN      NOT NULL DEFAULT FALSE,
     status            VARCHAR(16)  NOT NULL DEFAULT 'done',
     error_message     TEXT         NOT NULL,
     seq               INT          NOT NULL,
     created_at        TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     UNIQUE KEY uq_messages_conversation_seq (conversation_id, seq),
+    KEY idx_messages_summary_anchor (conversation_id, has_summary, seq),
     CONSTRAINT fk_messages_conversation_id
         FOREIGN KEY (conversation_id) REFERENCES conversations (id)
             ON DELETE CASCADE
@@ -98,15 +101,15 @@ CREATE TABLE tool_calls
 
 CREATE TABLE generation_rounds
 (
-    id                       BIGINT PRIMARY KEY AUTO_INCREMENT,
-    conversation_id          CHAR(36)     NOT NULL,
-    assistant_message_id     CHAR(36)     NOT NULL,
-    round                    INT          NOT NULL,
-    content_start_offset     INT          NOT NULL DEFAULT 0,
-    content_end_offset       INT          NOT NULL DEFAULT 0,
-    reasoning_start_offset   INT          NOT NULL DEFAULT 0,
-    reasoning_end_offset     INT          NOT NULL DEFAULT 0,
-    created_at               TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    id                     BIGINT PRIMARY KEY AUTO_INCREMENT,
+    conversation_id        CHAR(36)     NOT NULL,
+    assistant_message_id   CHAR(36)     NOT NULL,
+    round                  INT          NOT NULL,
+    content_start_offset   INT          NOT NULL DEFAULT 0,
+    content_end_offset     INT          NOT NULL DEFAULT 0,
+    reasoning_start_offset INT          NOT NULL DEFAULT 0,
+    reasoning_end_offset   INT          NOT NULL DEFAULT 0,
+    created_at             TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
     UNIQUE KEY uk_generation_rounds_message_round (assistant_message_id, round),
     KEY idx_generation_rounds_conversation_id (conversation_id),
@@ -116,5 +119,39 @@ CREATE TABLE generation_rounds
             ON DELETE CASCADE,
     CONSTRAINT fk_generation_rounds_assistant_message_id
         FOREIGN KEY (assistant_message_id) REFERENCES messages (id)
+            ON DELETE CASCADE
+) ENGINE = InnoDB;
+
+CREATE TABLE memory_items
+(
+    id              BIGINT PRIMARY KEY AUTO_INCREMENT,
+    owner_user_id   BIGINT        NULL,
+    conversation_id CHAR(36)      NULL,
+    scope           VARCHAR(32)   NOT NULL DEFAULT 'user',
+    category        VARCHAR(32)   NOT NULL,
+    origin          VARCHAR(32)   NOT NULL,
+    source_type     VARCHAR(32)   NOT NULL DEFAULT 'none',
+    source_ref      TEXT          NULL,
+    source_title    VARCHAR(256)  NULL,
+    content         MEDIUMTEXT    NOT NULL,
+    metadata_json   TEXT          NOT NULL,
+    confidence      DECIMAL(4, 3) NOT NULL DEFAULT 0.7,
+    expires_at      DATETIME(3)   NULL,
+    status          VARCHAR(16)   NOT NULL DEFAULT 'active',
+    created_at      TIMESTAMP(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at      TIMESTAMP(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+
+    KEY idx_memory_owner_status_updated (owner_user_id, status, updated_at, id),
+    KEY idx_memory_owner_status_category_updated (owner_user_id, status, category, updated_at, id),
+    KEY idx_memory_owner_status_scope_conversation_updated (owner_user_id, status, scope, conversation_id, updated_at, id),
+    KEY idx_memory_scope_status_updated (scope, status, updated_at, id),
+    KEY idx_memory_conversation (conversation_id),
+    KEY idx_memory_expires_at (expires_at),
+
+    CONSTRAINT fk_memory_owner_user_id
+        FOREIGN KEY (owner_user_id) REFERENCES users (id)
+            ON DELETE CASCADE,
+    CONSTRAINT fk_memory_conversation_id
+        FOREIGN KEY (conversation_id) REFERENCES conversations (id)
             ON DELETE CASCADE
 ) ENGINE = InnoDB;

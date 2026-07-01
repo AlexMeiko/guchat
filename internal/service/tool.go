@@ -9,8 +9,9 @@ import (
 var ErrToolNotFound = errors.New("tool not found")
 
 type UserContext struct {
-	UserID int64
-	Role   string
+	UserID         int64
+	ConversationID string
+	Role           string
 }
 
 type ToolCall struct {

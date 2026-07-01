@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -10,6 +12,10 @@ import (
 	"github.com/AlexMeiko/guchat/internal/db"
 	"github.com/AlexMeiko/guchat/internal/generator"
 	"github.com/AlexMeiko/guchat/internal/handler"
+	"github.com/AlexMeiko/guchat/internal/memory"
+	"github.com/AlexMeiko/guchat/internal/memory/embed"
+	"github.com/AlexMeiko/guchat/internal/memory/segment"
+	"github.com/AlexMeiko/guchat/internal/memory/vector"
 	"github.com/AlexMeiko/guchat/internal/repository"
 	"github.com/AlexMeiko/guchat/internal/router"
 	"github.com/AlexMeiko/guchat/internal/service"
@@ -31,6 +37,18 @@ func main() {
 
 	defer mysqlDB.Close()
 
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     0,
+		IdleConnTimeout:     60 * time.Second,
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   0,
+	}
+
 	jwtService := service.NewJWTService(
 		cfg.JWTSecret,
 		cfg.JWTAccessTTL,
@@ -50,6 +68,27 @@ func main() {
 	conversationService := service.NewConversationService(conversationRepo)
 	conversationHandler := handler.NewConversationHandler(conversationService)
 
+	memoryStore := memory.NewMySQLStore(mysqlDB)
+	mysqlMemoryRetriever := memory.NewMySQLRetriever(memoryStore)
+
+	memoryRAG, err := buildMemoryRAGComponents(context.Background(), client, cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	memoryIndexer, err := buildMemoryIndexer(memoryRAG)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	memoryRetriever, err := buildMemoryRetriever(mysqlMemoryRetriever, memoryRAG)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	memoryService := service.NewMemoryService(memoryStore, memoryRetriever, conversationRepo, memoryIndexer)
+	memoryHandler := handler.NewMemoryHandler(memoryService)
+
 	messageRepo := repository.NewMessageRepository(mysqlDB)
 	messageService := service.NewMessageService(conversationRepo, messageRepo)
 
@@ -63,6 +102,7 @@ func main() {
 		tool.NewBuiltinProvider(tool.BuiltinProviderConfig{
 			TavilyAPIKey:  cfg.TavilyAPIKey,
 			TavilyBaseURL: cfg.TavilyBaseURL,
+			MemoryService: memoryService,
 		}),
 	}
 
@@ -95,18 +135,6 @@ func main() {
 
 	modelHandler := handler.NewModelHandler(modelService)
 
-	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		MaxConnsPerHost:     0,
-		IdleConnTimeout:     60 * time.Second,
-	}
-
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   0,
-	}
-
 	generatorFactory := generator.NewFactory(map[string]service.Generator{
 		"openai":           generator.NewOpenAIChatCompletionsGenerator(client),
 		"openai_responses": generator.NewOpenAIResponsesGenerator(client),
@@ -116,12 +144,14 @@ func main() {
 	generationService := service.NewGenerationService(
 		messageService,
 		modelService,
+		memoryService,
 		generatorFactory,
 		runtimeManager,
 		toolProviderManager,
 		toolCallRepo,
 		generationRoundRepo,
-		cfg.GenerationContextLimit,
+		cfg.ContextTokenLimit,
+		cfg.ContextCompressRatio,
 		cfg.GenerationMaxToolRounds,
 		time.Duration(cfg.GenerationRetryInterval)*time.Second,
 		int(cfg.GenerationRetryMax),
@@ -130,10 +160,133 @@ func main() {
 
 	go generationService.RetryLoop(context.Background())
 
-	r := router.New(authHandler, conversationHandler, messageHandler, modelHandler, generationHandler, jwtService)
+	r := router.New(authHandler, conversationHandler, messageHandler, memoryHandler, modelHandler, generationHandler, jwtService)
 	log.Printf("server starting on port %s", cfg.Port)
 
 	if err := r.Run(":" + cfg.Port); err != nil {
 		panic(err)
 	}
+}
+
+type memoryRAGComponents struct {
+	splitter            segment.Splitter
+	embedder            embed.Embedder
+	index               vector.Index
+	similarityThreshold *float64
+}
+
+func buildMemoryRAGComponents(
+	ctx context.Context,
+	client *http.Client,
+	cfg config.Config,
+) (*memoryRAGComponents, error) {
+	if !cfg.MemoryRAGEnabled() {
+		return nil, nil
+	}
+
+	splitter, err := buildMemorySplitter(client, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	embedder, err := buildMemoryEmbedder(client, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	index, err := buildMemoryVectorIndex(ctx, client, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return &memoryRAGComponents{
+		splitter:            splitter,
+		embedder:            embedder,
+		index:               index,
+		similarityThreshold: cfg.MemorySimilarityThreshold,
+	}, nil
+}
+
+func buildMemoryIndexer(components *memoryRAGComponents) (memory.Indexer, error) {
+	if components == nil {
+		return nil, nil
+	}
+
+	return memory.NewVectorIndexer(components.splitter, components.embedder, components.index)
+}
+
+func buildMemoryRetriever(
+	fallback memory.Retriever,
+	components *memoryRAGComponents,
+) (memory.Retriever, error) {
+	if components == nil {
+		return fallback, nil
+	}
+
+	return memory.NewVectorRetriever(fallback, components.embedder, components.index, components.similarityThreshold)
+}
+
+func buildMemorySplitter(client *http.Client, cfg config.Config) (segment.Splitter, error) {
+	switch cfg.RAGSplitterProvider {
+	case "external_api":
+		var headers map[string]string
+		if cfg.RAGSplitterAPIHeaders != "" {
+			if err := json.Unmarshal([]byte(cfg.RAGSplitterAPIHeaders), &headers); err != nil {
+				return nil, err
+			}
+		}
+
+		return &segment.ExternalAPISplitter{
+			URL:          cfg.RAGSplitterAPIURL,
+			Headers:      headers,
+			SegmentsPath: cfg.RAGSplitterSegmentsPath,
+			Client:       client,
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported rag splitter provider: %s", cfg.RAGSplitterProvider)
+	}
+}
+
+func buildMemoryEmbedder(client *http.Client, cfg config.Config) (embed.Embedder, error) {
+	switch cfg.EmbeddingProvider {
+	case "openai":
+		return embed.NewOpenAIEmbedder(client, embed.OpenAIEmbedderConfig{
+			BaseURL: cfg.EmbeddingBaseURL,
+			APIKey:  cfg.EmbeddingAPIKey,
+			Model:   cfg.EmbeddingModel,
+		})
+	case "dashscope":
+		return embed.NewDashScopeEmbedder(client, embed.DashScopeEmbedderConfig{
+			BaseURL: cfg.EmbeddingBaseURL,
+			APIKey:  cfg.EmbeddingAPIKey,
+			Model:   cfg.EmbeddingModel,
+			Dim:     cfg.EmbeddingDim,
+		})
+
+	default:
+		return nil, fmt.Errorf("unsupported embedding provider: %s", cfg.EmbeddingProvider)
+	}
+}
+
+func buildMemoryVectorIndex(ctx context.Context, client *http.Client, cfg config.Config) (vector.Index, error) {
+	index, err := vector.NewQdrantIndex(client, vector.QdrantConfig{
+		BaseURL:    cfg.QdrantURL,
+		APIKey:     cfg.QdrantAPIKey,
+		Collection: cfg.QdrantCollection,
+		VectorSize: cfg.EmbeddingDim,
+		Distance:   cfg.QdrantDistance,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err := index.EnsureCollection(ctx); err != nil {
+		return nil, err
+	}
+	if err := index.EnsureIndexes(ctx); err != nil {
+		return nil, err
+	}
+
+	return index, nil
 }

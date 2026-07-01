@@ -1,6 +1,6 @@
 # guchat-go API 文档
 
-> 本文档以当前后端实现为准，面向前后端联调与后续接口维护。
+> 本文档以当前后端实现为准，面向前后端联调与接口维护。
 
 ---
 
@@ -14,7 +14,8 @@
 - [6. SSE 事件格式](#6-sse-事件格式)
 - [7. 已知边界行为](#7-已知边界行为)
 - [8. 工具调用](#8-工具调用)
-- [9. 联调示例](#9-联调示例)
+- [9. 运行配置](#9-运行配置)
+- [10. 联调示例](#10-联调示例)
 
 ---
 
@@ -75,6 +76,10 @@ Authorization: Bearer <access_token>
 - `GET /api/models`：已登录即可访问
 - `GET /api/admin/models`、`POST /api/admin/models`、`GET /api/admin/models/:id`、`PATCH /api/admin/models/:id`、`DELETE /api/admin/models/:id`：需要 `admin`
 
+记忆重建接口权限：
+
+- `GET /api/admin/memory/reindex`、`POST /api/admin/memory/reindex`：当前实现只要求已登录，暂未做 `admin` 角色判断。
+
 ---
 
 ## 3. 通用约定
@@ -83,6 +88,7 @@ Authorization: Bearer <access_token>
 
 - `200 OK`：查询、登录、刷新、更新成功
 - `201 Created`：创建成功
+- `202 Accepted`：异步任务已接受
 - `204 No Content`：删除成功、登出成功
 
 ### 3.2 错误响应
@@ -120,8 +126,9 @@ Authorization: Bearer <access_token>
 - 更新模型时，`extra_body` 为可选字段；不传或传 `null` 都表示“不修改该字段”，传 JSON object 表示更新为对应配置，传 `{}` 表示将其更新为空对象配置。
 - 创建模型时，以及更新模型时显式传入 `extra_body` 为 JSON object 时，会将其压缩规范化后存库。
 - 当前生成器会将 `extra_body` 合并进上游请求体，但不会允许覆盖保留字段：
-  - Chat Completions：`model`、`messages`、`stream`
+  - Chat Completions：`model`、`messages`、`stream`、`tools`、`tool_choice`
   - Responses API：`model`、`input`、`stream`
+- `openai_responses` 额外支持 `extra_body.tools`：如果它是数组，会从请求体中取出并追加到 Responses API 的 `tools` 列表；如果不是数组，生成时会失败。
 
 ---
 
@@ -147,6 +154,11 @@ Authorization: Bearer <access_token>
 | 消息 | DELETE | `/api/conversations/:conversation_id/messages/:message_id` | Yes | user/admin |
 | 生成 | POST | `/api/conversations/:conversation_id/messages/:message_id/generation` | Yes | user/admin |
 | 生成 | GET | `/api/conversations/:conversation_id/messages/:message_id/events` | Yes | user/admin |
+| 记忆 | GET | `/api/memory` | Yes | user/admin |
+| 记忆 | PATCH | `/api/memory/:id/status` | Yes | user/admin |
+| 记忆 | DELETE | `/api/memory/:id` | Yes | user/admin |
+| 记忆索引 | GET | `/api/admin/memory/reindex` | Yes | user/admin |
+| 记忆索引 | POST | `/api/admin/memory/reindex` | Yes | user/admin |
 | 模型 | GET | `/api/models` | Yes | user/admin |
 | 模型管理 | GET | `/api/admin/models` | Yes | admin |
 | 模型管理 | POST | `/api/admin/models` | Yes | admin |
@@ -309,7 +321,7 @@ Authorization: Bearer <access_token>
 [
   {
     "id": "uuid",
-    "title": "默认标题",
+    "title": "",
     "created_at": "2026-03-20T18:00:00+08:00",
     "updated_at": "2026-03-20T18:05:00+08:00"
   }
@@ -335,6 +347,8 @@ Authorization: Bearer <access_token>
 ```json
 {}
 ```
+
+不传标题时，当前实现会创建 `title=""` 的会话。
 
 成功响应：`201 Created`
 
@@ -574,7 +588,7 @@ Authorization: Bearer <access_token>
 实现说明：
 
 - 如果该消息当前仍存在内存中的生成任务，服务端会同步取消该任务
-- 删除后以数据库状态为准；后续再查询该消息应返回 `404`
+- 删除后以数据库状态为准；再次查询该消息返回 `404`
 
 常见失败：
 
@@ -594,20 +608,19 @@ Authorization: Bearer <access_token>
 
 - 路径中的 `:message_id` 是源消息 ID
 - 成功后会新建一条 assistant 消息，并异步开始生成
-- `context_limit` 为可选字段，表示本次生成最多携带多少条最近的非 `system` 消息
-- 所有 `system` 消息都会始终保留，不计入 `context_limit`
-- 不传 `context_limit` 时，当前实现默认使用 `25`
 - `tool_mode` 为可选字段，支持 `auto`、`none`；不传时默认为 `auto`
 - `tool_mode=auto` 时，生成器可使用内置工具和已配置的 MCP 工具
 - `tool_mode=none` 时，本次生成不向模型提供工具
-- 上下文裁剪范围截至源消息本身
+- 生成前会以 system 消息形式默认注入少量 active、未过期、scope=user 的基础记忆，分类限制为 `constraint`、`negative_preference`、`user_profile`、`preference`
+- 其他历史记忆、事实、总结和知识不会默认注入；`tool_mode=auto` 时模型可通过 `search_memory` 按需检索
+- 上下文范围截至源消息本身；系统会使用最近的摘要锚点和必要的原始消息构造上下文，超出压缩阈值时会进行历史摘要压缩
+- 生成前历史压缩会写入被覆盖历史消息的摘要 checkpoint
 
 请求体：
 
 ```json
 {
   "model_id": 1,
-  "context_limit": 25,
   "tool_mode": "auto"
 }
 ```
@@ -632,7 +645,6 @@ Authorization: Bearer <access_token>
 - `400 invalid conversation id`
 - `400 invalid message id`
 - `400 invalid request body`
-- `400 invalid context limit`
 - `400 invalid tool mode`
 - `404 conversation not found`
 - `404 message not found`
@@ -660,7 +672,155 @@ Authorization: Bearer <access_token>
 
 ---
 
-### 5.6 模型
+### 5.6 记忆
+
+通用 `/api/memory` 只用于管理当前用户自己的私有记忆条目，不提供公共创建接口。记忆由后端内部流程或内置工具创建。
+
+#### `GET /api/memory`
+
+说明：
+
+- 返回当前用户自己的 `user` / `conversation` scope 记忆。
+- 不返回 `global` 记忆。
+- 不传 `status` 时默认返回 `active` 和 `disabled`。
+- 支持按 `status`、`category`、`scope` 过滤，多个值用英文逗号分隔。
+- `limit` 默认 `50`，最大 `100`。
+- `offset` 默认 `0`。
+
+查询参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `status` | 可选，例如 `active`、`disabled`、`deleted` |
+| `category` | 可选，例如 `user_profile`、`preference`、`fact`、`knowledge` |
+| `scope` | 可选，只能是 `user` 或 `conversation` |
+| `limit` | 可选，范围 `1..100` |
+| `offset` | 可选，最小 `0` |
+
+成功响应：`200 OK`
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "conversation_id": "uuid",
+      "scope": "conversation",
+      "category": "preference",
+      "origin": "assistant_summary",
+      "source_type": "conversation",
+      "source_ref": "uuid",
+      "source_title": "会话标题",
+      "content": "用户希望助手称呼自己为 a。",
+      "metadata": {},
+      "confidence": 1,
+      "expires_at": "2026-06-30T12:00:00+08:00",
+      "status": "active",
+      "created_at": "2026-06-04T12:00:00+08:00",
+      "updated_at": "2026-06-04T12:00:00+08:00"
+    }
+  ]
+}
+```
+
+常见失败：
+
+- `400 invalid limit`
+- `400 invalid offset`
+- `400 invalid memory filter`
+- `401 missing Authorization header`
+- `500 internal server error`
+
+#### `PATCH /api/memory/:id/status`
+
+请求体：
+
+```json
+{
+  "status": "disabled"
+}
+```
+
+说明：
+
+- 支持目标状态：`active`、`disabled`、`deleted`。
+- 只能管理当前用户自己的 `user` / `conversation` scope 记忆。
+- 已删除记忆不能重新启用。
+- 普通用户不能通过该接口管理 `global` 记忆。
+
+成功响应：`204 No Content`
+
+常见失败：
+
+- `400 invalid memory id`
+- `400 invalid request body`
+- `400 invalid memory status`
+- `404 memory item not found`
+- `500 internal server error`
+
+#### `DELETE /api/memory/:id`
+
+说明：
+
+- 软删除当前用户自己的 `user` / `conversation` scope 记忆。
+- 成功后该条目不再被默认注入或工具检索返回。
+
+成功响应：`204 No Content`
+
+常见失败：
+
+- `400 invalid memory id`
+- `404 memory item not found`
+- `500 internal server error`
+
+#### `POST /api/admin/memory/reindex`
+
+说明：
+
+- 启动后台 active memory_items 全量重建。
+- 只有完整配置 Memory RAG 后才可使用；未配置 indexer 时返回 `400 memory indexer is not configured`。
+- 如果已有重建正在运行，会直接返回当前运行状态，不启动第二个任务。
+- 当前实现只要求已登录，暂未做 `admin` 角色判断。
+
+成功响应：`202 Accepted`
+
+```json
+{
+  "running": true,
+  "indexed": 0,
+  "failed": 0,
+  "started_at": "2026-07-02T10:00:00+08:00"
+}
+```
+
+常见失败：
+
+- `400 memory indexer is not configured`
+- `401 missing Authorization header`
+- `500 internal server error`
+
+#### `GET /api/admin/memory/reindex`
+
+说明：
+
+- 查看后台 active memory_items 全量重建状态。
+- 当前实现只要求已登录，暂未做 `admin` 角色判断。
+
+成功响应：`200 OK`
+
+```json
+{
+  "running": false,
+  "indexed": 120,
+  "failed": 3,
+  "started_at": "2026-07-02T10:00:00+08:00",
+  "finished_at": "2026-07-02T10:03:00+08:00"
+}
+```
+
+---
+
+### 5.7 模型
 
 #### `GET /api/models`
 
@@ -753,10 +913,13 @@ Authorization: Bearer <access_token>
 
 - `extra_body` 可省略；省略时等价于空对象
 - `extra_body` 必须是 JSON object，否则返回 `400 invalid extra_body`
-- 当前内置可用 provider：
+- 创建 / 更新模型配置时不会校验 provider 是否受支持；生成时才根据 provider 选择生成器。当前内置可用 provider：
   - `openai`
   - `openai_responses`
   - `fake`
+- 当 `provider=openai` 时，`base_url` 可以填写服务根地址或最终 `/chat/completions` 地址；不是最终地址时后端会追加 `/chat/completions`。
+- 当 `provider=openai_responses` 时，`base_url` 可以填写服务根地址或最终 `/responses` 地址；不是最终地址时后端会追加 `/responses`。
+- 当 `provider=openai_responses` 且 `extra_body.tools` 是数组时，这些工具定义会追加到上游 `tools` 列表；`extra_body.tools` 不是数组会导致生成失败。
 
 成功响应：`201 Created`
 
@@ -1039,7 +1202,7 @@ data: <json>
 
 ## 7. 已知边界行为
 
-- 删除生成中的消息后，数据库记录会被删除，后续 `GET /messages/:id` 应返回 `404`
+- 删除生成中的消息后，数据库记录会被删除，再次调用 `GET /messages/:id` 返回 `404`
 - 删除后，如果已有 SSE 连接仍处于极小的并发窗口，当前实现下它仍可能观察到 terminal 事件；业务状态应以数据库查询结果为准
 - 在极小的时序窗口里，`message.completed` 可能略早于数据库最终 `done` 状态可见
 - stdio MCP 工具调用开始后，当前实现会等待该工具调用返回
@@ -1056,15 +1219,301 @@ data: <json>
 | --- | --- | --- |
 | `get_current_time` | 默认启用 | 获取指定 IANA 时区的当前时间 |
 | `read_web_page` | 默认启用 | 读取公开网页正文 |
+| `search_memory` | MemoryService 已配置 | 搜索当前用户、当前会话和公共范围内的 active 记忆或知识 |
+| `add_memory` | MemoryService 已配置 | 写入 active 的 user / conversation scope 记忆 |
+| `disable_memory` | MemoryService 已配置 | 禁用当前用户自己的 user / conversation scope 记忆 |
 | `tavily_search` | 配置 `TAVILY_API_KEY` | 使用 Tavily 搜索互联网信息 |
+
+生成前会默认向模型提供少量基础记忆，但不会默认注入全部记忆或知识。默认注入只包含 active、未过期、scope=user 的 `constraint`、`negative_preference`、`user_profile`、`preference` 条目。需要更多历史记忆、事实、总结或知识时，模型应通过 `search_memory` 检索。
+
+#### `get_current_time`
+
+请求参数由模型生成。
+
+```json
+{
+  "timezone": "Asia/Shanghai"
+}
+```
+
+成功结果示例：
+
+```json
+{
+  "timezone": "Asia/Shanghai",
+  "time": "2026-07-02T10:00:00+08:00",
+  "unix": 1782957600
+}
+```
+
+#### `read_web_page`
+
+请求参数由模型生成。
+
+```json
+{
+  "url": "https://example.com",
+  "max_chars": 10000
+}
+```
+
+说明：
+
+- `url` 必填；未带 scheme 时后端会按 `https://` 补齐。
+- 只允许 `http` / `https`。
+- 禁止 `localhost`、回环地址、私有 IP、未指定地址和 link-local 地址。
+- 响应体最多读取 `2MB`，默认返回最多 `10000` 个字符；超出时 `truncated=true`。
+- 网页正文会解析 HTML、去除 `script`、`style`、`noscript`、`svg` 并做空白归一化。
+
+成功结果示例：
+
+```json
+{
+  "url": "https://example.com",
+  "final_url": "https://example.com/",
+  "status": 200,
+  "content_type": "text/html; charset=utf-8",
+  "text": "Example Domain\nThis domain is for use in illustrative examples...",
+  "truncated": false
+}
+```
+
+#### `tavily_search`
+
+请求参数由模型生成。只有配置 `TAVILY_API_KEY` 时该工具才会暴露给模型。
+
+```json
+{
+  "query": "OpenAI latest API changes"
+}
+```
+
+说明：
+
+- 后端固定向 Tavily 发送 `search_depth=advanced` 和 `max_results=10`。
+- `TAVILY_BASE_URL` 未配置时使用 `https://api.tavily.com`。
+- 工具结果是 Tavily 返回的原始 JSON。
+
+#### `search_memory`
+
+请求参数由模型生成，后端不会允许模型传 `user_id`、`conversation_id` 或 `status`。
+
+```json
+{
+  "query": "用户希望我如何称呼他？",
+  "keywords": ["称呼", "用户"],
+  "categories": ["user_profile", "preference"],
+  "scopes": ["user", "conversation", "global"],
+  "limit": 5
+}
+```
+
+说明：
+
+- `query`：自然语言检索意图。
+- `keywords`：少量精确关键词或短语，只用于辅助匹配专有名词、函数名、文件名、项目名、错误码、API 名称等。不要堆词，也不要把自然语言整句拆成关键词；语义检索主要依赖 `query`，不确定时可以不传。
+- `categories`、`scopes`：可选过滤条件。
+- `limit`：可选，未传或小于等于 `0` 时使用后端默认值；当前最多返回 `20` 条。
+- 只返回 `active` 且未过期的条目。
+
+成功结果示例：
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "scope": "user",
+      "category": "user_profile",
+      "source_type": "conversation",
+      "source_ref": "uuid",
+      "content": "用户希望助手称呼自己为 a。",
+      "confidence": 1,
+      "updated_at": "2026-06-04T12:00:00+08:00"
+    }
+  ]
+}
+```
+
+#### `add_memory`
+
+请求参数由模型生成，后端不会允许模型传 `user_id`、`conversation_id`、`origin` 或 `status`。
+
+```json
+{
+  "scope": "user",
+  "category": "user_profile",
+  "source_type": "conversation",
+  "content": "用户希望助手称呼自己为 a。",
+  "confidence": 1
+}
+```
+
+说明：
+
+- `content` 必填，应简洁、明确、可复用。
+- `scope` 可选，只能是 `user` 或 `conversation`；缺省值为 `user`。
+- `category` 可选；缺省值为 `fact`。
+- `source_type` 可选，例如 `none`、`conversation`、`web`、`file`、`api`、`repo`、`manual`。在对话中未传时，`add_memory` 默认记录为当前会话来源，相关来源引用由后端自动处理。
+- `source_ref` 可选。`source_type=conversation` 时不需要传，当前会话来源由后端自动处理；网页、文件、repo 等外部来源可传 URL、文件 key 或 repo path。
+- `source_title` 可选。
+- `confidence` 可选，范围 `0..1`；未传时后端默认处理。
+- `expires_at` 可选，RFC3339 格式；长期有效的记忆不要传。
+- `category=constraint`、`negative_preference`、`user_profile`、`preference` 的 user scope 条目会在新生成请求中作为基础记忆提供给模型，因此只应用于长期稳定、跨会话普遍有用的信息。普通事实、知识、总结、短期状态不要放入这些分类。
+- 后端会根据来源设置 origin：`web` / `api` / `repo` / `file` 来源写入 `tool_generated`，其他来源写入 `assistant_summary`。
+
+成功结果示例：
+
+```json
+{
+  "ok": true
+}
+```
+
+#### `disable_memory`
+
+请求参数由模型生成，后端不会允许模型传 `user_id`、`conversation_id`、`scope` 或 `status`。
+
+```json
+{
+  "id": 1
+}
+```
+
+说明：
+
+- `id` 必填，应来自 `search_memory` 返回的当前用户私有记忆 ID。
+- 只能禁用当前用户自己的 `user` / `conversation` scope 记忆，不能禁用 `global` 记忆或其他用户的记忆。
+- 禁用后状态变为 `disabled`，不会再被默认注入或被 `search_memory` 检索到；数据仍保留在数据库中。
+- 只有当用户明确要求忘记、不要再记住、禁用某条记忆，或明确纠正已保存记忆时才应使用。通常应先调用 `search_memory` 定位目标 ID。
+
+成功结果示例：
+
+```json
+{
+  "ok": true
+}
+```
+
+工具失败时，工具结果会以 JSON 字符串形式记录为：
+
+```json
+{
+  "error": "错误描述"
+}
+```
 
 外部 MCP 工具由服务端配置决定。MCP 工具暴露给模型时会自动加上服务名前缀，例如服务名为 `tavily` 且远端工具名为 `tavily_extract` 时，模型侧工具名为 `tavily.tavily_extract`。
 
 ---
 
-## 9. 联调示例
+## 9. 运行配置
 
-### 9.1 登录
+配置来自环境变量，启动时会尝试加载 `.env`。
+
+### 9.1 基础配置
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PORT` | `8080` | HTTP 监听端口 |
+| `DATABASE_URL` | 必填 | MySQL 连接地址 |
+| `JWT_SECRET` | 必填 | JWT 签名密钥 |
+| `JWT_ACCESS_TTL_SECONDS` | `3600` | access token 有效期 |
+| `JWT_REFRESH_TTL_SECONDS` | `2592000` | refresh token 有效期 |
+
+### 9.2 生成与上下文
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `CONTEXT_TOKEN_LIMIT` | `32000` | 上下文粗估 token 上限，最小为 `1` |
+| `CONTEXT_COMPRESS_RATIO` | `0.8` | 历史压缩触发比例，必须在 `(0, 1]`，非法时回退 `0.8` |
+| `GENERATION_MAX_TOOL_ROUNDS` | `12` | 单次生成最大工具轮次，最小为 `1` |
+| `GENERATION_RETRY_INTERVAL_SECONDS` | `30` | 最终写库失败后的重试间隔，最小为 `1` |
+| `GENERATION_RETRY_MAX` | `5` | 最终写库失败后的最大重试次数，最小为 `1` |
+
+### 9.3 Tavily
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `TAVILY_API_KEY` | 空 | 配置后启用 `tavily_search` 工具 |
+| `TAVILY_BASE_URL` | `https://api.tavily.com` | Tavily API base URL |
+
+### 9.4 Memory RAG
+
+Memory RAG 是可选能力。只有以下配置完整时，服务才会启用向量索引写入和向量检索；否则退回 MySQL 检索。
+
+必需完整配置：
+
+```env
+EMBEDDING_PROVIDER=openai
+EMBEDDING_BASE_URL=
+EMBEDDING_MODEL=
+EMBEDDING_DIM=1024
+QDRANT_URL=
+QDRANT_COLLECTION=
+RAG_SPLITTER_PROVIDER=external_api
+RAG_SPLITTER_API_URL=
+RAG_SPLITTER_API_SEGMENTS_PATH=chunks
+```
+
+可选配置：
+
+```env
+EMBEDDING_API_KEY=
+QDRANT_API_KEY=
+QDRANT_DISTANCE=Cosine
+MEMORY_SIMILARITY_THRESHOLD=
+RAG_SPLITTER_API_HEADERS_JSON={}
+```
+
+说明：
+
+- `EMBEDDING_PROVIDER` 当前支持 `openai` 和 `dashscope`。
+- `EMBEDDING_BASE_URL` 必须是最终 embedding 请求地址，不会自动追加 endpoint。
+- `EMBEDDING_DIM` 会作为 Qdrant collection vector size。
+- `dashscope` provider 会把 `EMBEDDING_DIM` 作为 `parameters.dimension` 传给上游。
+- `openai` embedding provider 不传 `dimensions` 参数。
+- `RAG_SPLITTER_PROVIDER` 当前只支持 `external_api`。
+- 启用 RAG 后，服务启动时会创建 Qdrant collection，并创建 `memory_item_id`、`owner_user_id`、`scope`、`conversation_id`、`status`、`category` payload index。
+
+### 9.5 MCP
+
+`MCP_SERVERS` 是 JSON 数组字符串。每个 server 必须有唯一 `name`，并支持 `transport=http` 或 `transport=stdio`。
+
+HTTP 示例：
+
+```json
+[
+  {
+    "name": "tavily",
+    "transport": "http",
+    "url": "https://mcp.tavily.com/mcp/",
+    "auth_type": "query",
+    "auth_field": "tavilyApiKey",
+    "auth_key": "your-api-key"
+  }
+]
+```
+
+stdio 示例：
+
+```json
+[
+  {
+    "name": "github",
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": ["GITHUB_PERSONAL_ACCESS_TOKEN=your-token"]
+  }
+]
+```
+
+---
+
+## 10. 联调示例
+
+### 10.1 登录
 
 ```bash
 curl -X POST http://localhost:8080/api/auth/login \
@@ -1072,14 +1521,14 @@ curl -X POST http://localhost:8080/api/auth/login \
   -d '{"username":"alex","password":"123456"}'
 ```
 
-### 9.2 获取会话列表
+### 10.2 获取会话列表
 
 ```bash
 curl http://localhost:8080/api/conversations \
   -H "Authorization: Bearer <access_token>"
 ```
 
-### 9.3 分页获取消息
+### 10.3 分页获取消息
 
 获取最新 20 条消息：
 
@@ -1095,7 +1544,7 @@ curl "http://localhost:8080/api/conversations/<conversation_id>/messages?before_
   -H "Authorization: Bearer <access_token>"
 ```
 
-### 9.4 创建用户消息
+### 10.4 创建用户消息
 
 ```bash
 curl -X POST "http://localhost:8080/api/conversations/<conversation_id>/messages" \
@@ -1104,16 +1553,16 @@ curl -X POST "http://localhost:8080/api/conversations/<conversation_id>/messages
   -d '{"content":"你好"}'
 ```
 
-### 9.5 触发生成
+### 10.5 触发生成
 
 ```bash
 curl -X POST "http://localhost:8080/api/conversations/<conversation_id>/messages/<message_id>/generation" \
   -H "Authorization: Bearer <access_token>" \
   -H "Content-Type: application/json" \
-  -d '{"model_id":1,"context_limit":25,"tool_mode":"auto"}'
+  -d '{"model_id":1,"tool_mode":"auto"}'
 ```
 
-### 9.6 创建模型
+### 10.6 创建模型
 
 ```bash
 curl -X POST "http://localhost:8080/api/admin/models" \
@@ -1130,10 +1579,17 @@ curl -X POST "http://localhost:8080/api/admin/models" \
   }'
 ```
 
-### 9.7 订阅 SSE
+### 10.7 订阅 SSE
 
 ```bash
 curl -N "http://localhost:8080/api/conversations/<conversation_id>/messages/<assistant_message_id>/events" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+### 10.8 启动记忆重建
+
+```bash
+curl -X POST "http://localhost:8080/api/admin/memory/reindex" \
   -H "Authorization: Bearer <access_token>"
 ```
 
