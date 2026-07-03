@@ -375,6 +375,7 @@ func (s *GenerationService) Process(
 	}
 
 	var toolExchanges []ToolExchange
+	var generationRounds []GenerationRound
 	completed := false
 
 	for round := 1; round <= s.maxToolRounds; round++ {
@@ -387,13 +388,14 @@ func (s *GenerationService) Process(
 		contentStartOffset := len(snapshot.Content)
 		reasoningStartOffset := len(snapshot.ReasoningContent)
 
-		if snapshot.Content != "" || len(toolExchanges) > 0 {
+		if snapshot.Content != "" || len(toolExchanges) > 0 || len(generationRounds) > 0 {
 			roundMessages = append(roundMessages, GenerateMessage{
 				ID:               assistantMessageID,
 				Role:             entity.MessageRoleAssistant,
 				Content:          snapshot.Content,
 				ReasoningContent: snapshot.ReasoningContent,
 				ToolExchanges:    toolExchanges,
+				GenerationRounds: generationRounds,
 			})
 		}
 
@@ -417,7 +419,7 @@ func (s *GenerationService) Process(
 		reasoningEndOffset := len(snapshot.ReasoningContent)
 
 		if contentEndOffset > contentStartOffset || reasoningEndOffset > reasoningStartOffset || len(calls) > 0 {
-			if err := s.generationRoundRepo.Create(ctx, &entity.GenerationRound{
+			roundRecord := &entity.GenerationRound{
 				ConversationID:       conversationID,
 				AssistantMessageID:   assistantMessageID,
 				Round:                round,
@@ -425,9 +427,19 @@ func (s *GenerationService) Process(
 				ContentEndOffset:     contentEndOffset,
 				ReasoningStartOffset: reasoningStartOffset,
 				ReasoningEndOffset:   reasoningEndOffset,
-			}); err != nil {
+			}
+
+			if err := s.generationRoundRepo.Create(ctx, roundRecord); err != nil {
 				return fail(err)
 			}
+
+			generationRounds = append(generationRounds, GenerationRound{
+				Round:                roundRecord.Round,
+				ContentStartOffset:   roundRecord.ContentStartOffset,
+				ContentEndOffset:     roundRecord.ContentEndOffset,
+				ReasoningStartOffset: roundRecord.ReasoningStartOffset,
+				ReasoningEndOffset:   roundRecord.ReasoningEndOffset,
+			})
 		}
 
 		if len(calls) == 0 {
