@@ -107,6 +107,21 @@ func (r *DockerRunner) Exec(
 	return nil, err
 }
 
+func (r *DockerRunner) Destroy(ctx context.Context, userID int64, conversationID string) error {
+	name := dockerContainerName(userID, conversationID)
+	output, err := exec.CommandContext(ctx, "docker", "rm", "-f", name).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+
+	text := strings.TrimSpace(string(output))
+	if strings.Contains(text, "No such container") {
+		return nil
+	}
+
+	return fmt.Errorf("destroy docker container %s: %w: %s", name, err, text)
+}
+
 func (r *DockerRunner) Check(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "docker", "info")
 	output, err := cmd.CombinedOutput()

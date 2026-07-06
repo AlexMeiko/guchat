@@ -1,21 +1,43 @@
 package sandbox
 
 import (
+	"container/heap"
 	"context"
 	"errors"
+	"sync"
 	"time"
 )
 
 var ErrTerminalNotOpen = errors.New("terminal not open")
 
+const (
+	terminalCleanupBudget = 5 * time.Second
+)
+
+type terminalState struct {
+	expiresAt time.Time
+	running   int
+}
+
 type Manager struct {
 	workspaceManager *WorkspaceManager
 	runner           Runner
+	idleTimeout      time.Duration
+
+	mu              sync.Mutex
+	activeTerminals map[terminalKey]terminalState
+	expireHeap      terminalExpireHeap
+}
+
+type terminalKey struct {
+	userID         int64
+	conversationID string
 }
 
 type Runner interface {
 	Open(ctx context.Context, input OpenInput) error
 	Exec(ctx context.Context, userID int64, conversationID string, input ExecInput) (*ExecResult, error)
+	Destroy(ctx context.Context, userID int64, conversationID string) error
 }
 
 type OpenInput struct {
@@ -38,10 +60,16 @@ type ExecResult struct {
 	Truncated bool
 }
 
-func NewManager(workspaceManager *WorkspaceManager, runner Runner) *Manager {
+func NewManager(workspaceManager *WorkspaceManager, runner Runner, idleTimeout time.Duration) *Manager {
+	if idleTimeout <= 0 {
+		idleTimeout = 30 * time.Minute
+	}
+
 	return &Manager{
 		workspaceManager: workspaceManager,
 		runner:           runner,
+		idleTimeout:      idleTimeout,
+		activeTerminals:  make(map[terminalKey]terminalState),
 	}
 }
 
@@ -51,11 +79,16 @@ func (m *Manager) Open(ctx context.Context, userID int64, conversationID string)
 		return err
 	}
 
-	return m.runner.Open(ctx, OpenInput{
+	if err := m.runner.Open(ctx, OpenInput{
 		UserID:         userID,
 		ConversationID: conversationID,
 		WorkspacePath:  workspacePath,
-	})
+	}); err != nil {
+		return err
+	}
+
+	m.touchTerminal(userID, conversationID, m.idleTimeout)
+	return nil
 }
 
 func (m *Manager) Exec(
@@ -68,5 +101,117 @@ func (m *Manager) Exec(
 		input.Timeout = 30 * time.Second
 	}
 
+	m.markTerminalRunning(userID, conversationID)
+	defer m.markTerminalDone(userID, conversationID, m.idleTimeout)
+
 	return m.runner.Exec(ctx, userID, conversationID, input)
+}
+
+// 清理逻辑 lazy heap + map
+
+func (m *Manager) touchTerminal(userID int64, conversationID string, ttl time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := terminalKey{userID: userID, conversationID: conversationID}
+	expiresAt := time.Now().Add(ttl)
+
+	state, exists := m.activeTerminals[key]
+	state.expiresAt = expiresAt
+	m.activeTerminals[key] = state
+
+	if !exists {
+		heap.Push(&m.expireHeap, terminalExpireItem{
+			key:       key,
+			expiresAt: expiresAt,
+		})
+	}
+}
+
+func (m *Manager) markTerminalRunning(userID int64, conversationID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := terminalKey{userID: userID, conversationID: conversationID}
+
+	state, exists := m.activeTerminals[key]
+	if !exists {
+		return
+	}
+
+	state.running++
+	m.activeTerminals[key] = state
+}
+
+func (m *Manager) markTerminalDone(userID int64, conversationID string, ttl time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := terminalKey{userID: userID, conversationID: conversationID}
+
+	state, exists := m.activeTerminals[key]
+	if !exists {
+		return
+	}
+
+	if state.running > 0 {
+		state.running--
+	}
+	state.expiresAt = time.Now().Add(ttl)
+	m.activeTerminals[key] = state
+}
+
+func (m *Manager) CleanupExpired(ctx context.Context) {
+	deadline := time.Now().Add(terminalCleanupBudget)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for {
+		now := time.Now()
+		item, ok := m.expireHeap.Peek()
+		if !ok || now.Before(item.expiresAt) {
+			return
+		}
+
+		heap.Pop(&m.expireHeap)
+
+		state, exists := m.activeTerminals[item.key]
+		if !exists {
+			continue
+		}
+
+		if !state.expiresAt.Equal(item.expiresAt) {
+			heap.Push(&m.expireHeap, terminalExpireItem{
+				key:       item.key,
+				expiresAt: state.expiresAt,
+			})
+			continue
+		}
+
+		if state.running > 0 {
+			state.expiresAt = now.Add(m.idleTimeout)
+			m.activeTerminals[item.key] = state
+
+			heap.Push(&m.expireHeap, terminalExpireItem{
+				key:       item.key,
+				expiresAt: state.expiresAt,
+			})
+			continue
+		}
+
+		if err := m.runner.Destroy(ctx, item.key.userID, item.key.conversationID); err != nil {
+			heap.Push(&m.expireHeap, terminalExpireItem{
+				key:       item.key,
+				expiresAt: state.expiresAt,
+			})
+			return
+		}
+
+		delete(m.activeTerminals, item.key)
+
+		if time.Now().After(deadline) {
+			return
+		}
+	}
 }

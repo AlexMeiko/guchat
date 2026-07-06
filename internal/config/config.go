@@ -23,9 +23,10 @@ type Config struct {
 	GenerationRetryInterval int64
 	GenerationRetryMax      int64
 
-	SandboxEnabled  bool
-	SandboxDataRoot string
-	SandboxImage    string
+	SandboxEnabled            bool
+	SandboxDataRoot           string
+	SandboxImage              string
+	SandboxIdleTimeoutSeconds int64
 
 	TavilyAPIKey              string
 	TavilyBaseURL             string
@@ -100,9 +101,10 @@ func Load() (Config, error) {
 		GenerationRetryInterval: max(getEnvInt64("GENERATION_RETRY_INTERVAL_SECONDS", 30), 1),
 		GenerationRetryMax:      max(getEnvInt64("GENERATION_RETRY_MAX", 5), 1),
 
-		SandboxEnabled:  getEnvBool("SANDBOX_ENABLED", false),
-		SandboxDataRoot: strings.TrimSpace(getEnv("SANDBOX_DATA_ROOT", "./data/sandbox")),
-		SandboxImage:    strings.TrimSpace(getEnv("SANDBOX_IMAGE", "debian:bookworm-slim")),
+		SandboxEnabled:            getEnvBool("SANDBOX_ENABLED", false),
+		SandboxDataRoot:           strings.TrimSpace(getEnv("SANDBOX_DATA_ROOT", "./data/sandbox")),
+		SandboxImage:              strings.TrimSpace(getEnv("SANDBOX_IMAGE", "debian:bookworm-slim")),
+		SandboxIdleTimeoutSeconds: max(getEnvInt64("SANDBOX_IDLE_TIMEOUT_SECONDS", 1800), 1),
 
 		TavilyAPIKey:              strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
 		TavilyBaseURL:             strings.TrimRight(strings.TrimSpace(getEnv("TAVILY_BASE_URL", defaultTavilyBaseURL)), "/"),

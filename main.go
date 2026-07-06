@@ -123,7 +123,22 @@ func main() {
 		}
 		cancel()
 
-		sandboxManager := sandbox.NewManager(workspaceManager, dockerRunner)
+		sandboxManager := sandbox.NewManager(
+			workspaceManager,
+			dockerRunner,
+			time.Duration(cfg.SandboxIdleTimeoutSeconds)*time.Second,
+		)
+		go func() {
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+
+			for range ticker.C {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				sandboxManager.CleanupExpired(cleanupCtx)
+				cancel()
+			}
+		}()
+
 		toolProviders = append(toolProviders, tool.NewTerminalProvider(sandboxManager))
 	}
 
