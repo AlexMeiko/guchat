@@ -71,7 +71,7 @@ func (r *DockerRunner) Exec(
 
 	startedAt := time.Now()
 
-	cmd := exec.CommandContext(execCtx, "docker", "exec", name, "sh", "-lc", input.Command)
+	cmd := exec.CommandContext(execCtx, "docker", "exec", name, "sh", "-c", input.Command)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
