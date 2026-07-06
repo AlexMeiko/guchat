@@ -18,6 +18,7 @@ import (
 	"github.com/AlexMeiko/guchat/internal/memory/vector"
 	"github.com/AlexMeiko/guchat/internal/repository"
 	"github.com/AlexMeiko/guchat/internal/router"
+	"github.com/AlexMeiko/guchat/internal/sandbox"
 	"github.com/AlexMeiko/guchat/internal/service"
 	"github.com/AlexMeiko/guchat/internal/stream"
 	"github.com/AlexMeiko/guchat/internal/tool"
@@ -67,6 +68,12 @@ func main() {
 	conversationRepo := repository.NewConversationRepository(mysqlDB)
 	conversationService := service.NewConversationService(conversationRepo)
 	conversationHandler := handler.NewConversationHandler(conversationService)
+	workspaceManager, err := sandbox.NewWorkspaceManager(cfg.SandboxDataRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+	workspaceService := service.NewWorkspaceService(conversationService, workspaceManager)
+	workspaceHandler := handler.NewWorkspaceHandler(workspaceService)
 
 	memoryStore := memory.NewMySQLStore(mysqlDB)
 	mysqlMemoryRetriever := memory.NewMySQLRetriever(memoryStore)
@@ -160,7 +167,16 @@ func main() {
 
 	go generationService.RetryLoop(context.Background())
 
-	r := router.New(authHandler, conversationHandler, messageHandler, memoryHandler, modelHandler, generationHandler, jwtService)
+	r := router.New(
+		authHandler,
+		conversationHandler,
+		messageHandler,
+		memoryHandler,
+		modelHandler,
+		generationHandler,
+		workspaceHandler,
+		jwtService,
+	)
 	log.Printf("server starting on port %s", cfg.Port)
 
 	if err := r.Run(":" + cfg.Port); err != nil {

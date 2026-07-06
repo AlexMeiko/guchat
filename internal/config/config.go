@@ -12,16 +12,19 @@ import (
 )
 
 type Config struct {
-	Port                      string
-	DatabaseURL               string
-	JWTSecret                 string
-	JWTAccessTTL              int64
-	JWTRefreshTTL             int64
-	ContextTokenLimit         int
-	ContextCompressRatio      float64
-	GenerationMaxToolRounds   int
-	GenerationRetryInterval   int64
-	GenerationRetryMax        int64
+	Port                    string
+	DatabaseURL             string
+	JWTSecret               string
+	JWTAccessTTL            int64
+	JWTRefreshTTL           int64
+	ContextTokenLimit       int
+	ContextCompressRatio    float64
+	GenerationMaxToolRounds int
+	GenerationRetryInterval int64
+	GenerationRetryMax      int64
+
+	SandboxDataRoot string
+
 	TavilyAPIKey              string
 	TavilyBaseURL             string
 	EmbeddingProvider         string
@@ -84,16 +87,19 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		Port:                      getEnv("PORT", "8080"),
-		DatabaseURL:               databaseURL,
-		JWTSecret:                 jwtSecret,
-		JWTAccessTTL:              getEnvInt64("JWT_ACCESS_TTL_SECONDS", 3600),
-		JWTRefreshTTL:             getEnvInt64("JWT_REFRESH_TTL_SECONDS", 2592000),
-		ContextTokenLimit:         int(max(getEnvInt64("CONTEXT_TOKEN_LIMIT", 32000), 1)),
-		ContextCompressRatio:      contextCompressRatio,
-		GenerationMaxToolRounds:   max(int(getEnvInt64("GENERATION_MAX_TOOL_ROUNDS", 12)), 1),
-		GenerationRetryInterval:   max(getEnvInt64("GENERATION_RETRY_INTERVAL_SECONDS", 30), 1),
-		GenerationRetryMax:        max(getEnvInt64("GENERATION_RETRY_MAX", 5), 1),
+		Port:                    getEnv("PORT", "8080"),
+		DatabaseURL:             databaseURL,
+		JWTSecret:               jwtSecret,
+		JWTAccessTTL:            getEnvInt64("JWT_ACCESS_TTL_SECONDS", 3600),
+		JWTRefreshTTL:           getEnvInt64("JWT_REFRESH_TTL_SECONDS", 2592000),
+		ContextTokenLimit:       int(max(getEnvInt64("CONTEXT_TOKEN_LIMIT", 32000), 1)),
+		ContextCompressRatio:    contextCompressRatio,
+		GenerationMaxToolRounds: max(int(getEnvInt64("GENERATION_MAX_TOOL_ROUNDS", 12)), 1),
+		GenerationRetryInterval: max(getEnvInt64("GENERATION_RETRY_INTERVAL_SECONDS", 30), 1),
+		GenerationRetryMax:      max(getEnvInt64("GENERATION_RETRY_MAX", 5), 1),
+
+		SandboxDataRoot: strings.TrimSpace(getEnv("SANDBOX_DATA_ROOT", "./data/sandbox")),
+
 		TavilyAPIKey:              strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
 		TavilyBaseURL:             strings.TrimRight(strings.TrimSpace(getEnv("TAVILY_BASE_URL", defaultTavilyBaseURL)), "/"),
 		EmbeddingProvider:         strings.TrimSpace(os.Getenv("EMBEDDING_PROVIDER")),
