@@ -19,6 +19,11 @@ type SaveWorkspaceFileInput struct {
 	Overwrite      bool
 }
 
+type ResolveWorkspaceFileResult struct {
+	HostPath string
+	Name     string
+}
+
 func NewWorkspaceService(
 	conversationService *ConversationService,
 	workspaceManager *sandbox.WorkspaceManager,
@@ -70,4 +75,25 @@ func (s *WorkspaceService) DeleteItem(
 	}
 
 	return s.workspaceManager.DeleteItem(userID, conversationID, name)
+}
+
+func (s *WorkspaceService) ResolveFile(
+	ctx context.Context,
+	userID int64,
+	conversationID string,
+	name string,
+) (*ResolveWorkspaceFileResult, error) {
+	if _, err := s.conversationService.Get(ctx, userID, conversationID); err != nil {
+		return nil, err
+	}
+
+	hostPath, file, err := s.workspaceManager.ResolveFilePath(userID, conversationID, name)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ResolveWorkspaceFileResult{
+		HostPath: hostPath,
+		Name:     file.Name,
+	}, nil
 }

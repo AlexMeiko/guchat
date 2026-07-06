@@ -53,6 +53,7 @@ func New(
 			conversation.POST("/:conversation_id/files", workspaceHandler.Upload)
 			conversation.GET("/:conversation_id/files", workspaceHandler.List)
 			conversation.DELETE("/:conversation_id/files", workspaceHandler.Delete)
+			conversation.GET("/:conversation_id/files/download", workspaceHandler.Download)
 
 		}
 

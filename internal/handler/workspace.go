@@ -138,6 +138,44 @@ func (h *WorkspaceHandler) Delete(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+func (h *WorkspaceHandler) Download(c *gin.Context) {
+	conversationID := c.Param("conversation_id")
+	if _, err := uuid.Parse(conversationID); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid conversation id"})
+		return
+	}
+
+	name := c.Query("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "file name is required"})
+		return
+	}
+
+	user, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+
+	result, err := h.workspaceService.ResolveFile(c.Request.Context(), user.UserID, conversationID, name)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrConversationNotFound):
+			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "conversation not found"})
+		case errors.Is(err, sandbox.ErrInvalidFileName):
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid file name"})
+		case errors.Is(err, sandbox.ErrWorkspaceFileNotFound):
+			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "file not found"})
+		case errors.Is(err, sandbox.ErrWorkspaceItemIsDir):
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "cannot download directory"})
+		default:
+			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: "internal server error"})
+		}
+		return
+	}
+
+	c.FileAttachment(result.HostPath, result.Name)
+}
+
 func newWorkspaceFileResponse(file sandbox.WorkspaceFile) model.WorkspaceFileResponse {
 	return model.WorkspaceFileResponse{
 		Name:      file.Name,

@@ -296,6 +296,7 @@ func (s *GenerationService) Process(
 	if toolMode == ToolModeAuto {
 		tools, err = s.toolProviderManager.ListTools(ctx, UserContext{
 			UserID: userID,
+			ConversationID: conversationID,
 		})
 		if err != nil {
 			return fail(err)

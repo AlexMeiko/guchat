@@ -113,6 +113,20 @@ func main() {
 		}),
 	}
 
+	if cfg.SandboxEnabled {
+		dockerRunner := sandbox.NewDockerRunner(cfg.SandboxImage)
+
+		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := dockerRunner.Check(checkCtx); err != nil {
+			cancel()
+			log.Fatal(err)
+		}
+		cancel()
+
+		sandboxManager := sandbox.NewManager(workspaceManager, dockerRunner)
+		toolProviders = append(toolProviders, tool.NewTerminalProvider(sandboxManager))
+	}
+
 	for _, server := range cfg.MCPServers {
 		toolProviders = append(toolProviders, tool.NewMCPProvider(tool.MCPProviderConfig{
 			Name:      server.Name,

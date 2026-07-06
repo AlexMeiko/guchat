@@ -15,6 +15,7 @@ import (
 var ErrInvalidFileName = errors.New("invalid file name")
 var ErrFileExists = errors.New("file already exists")
 var ErrWorkspaceFileNotFound = errors.New("workspace file not found")
+var ErrWorkspaceItemIsDir = errors.New("workspace item is directory")
 
 type WorkspaceFile struct {
 	Name      string
@@ -187,4 +188,42 @@ func (m *WorkspaceManager) DeleteItem(userID int64, conversationID string, name 
 	}
 
 	return os.RemoveAll(targetPath)
+}
+
+func (m *WorkspaceManager) ResolveFilePath(
+	userID int64,
+	conversationID string,
+	name string,
+) (string, WorkspaceFile, error) {
+	name, err := cleanFileName(name)
+	if err != nil {
+		return "", WorkspaceFile{}, err
+	}
+
+	workspacePath, err := m.EnsureWorkspace(userID, conversationID)
+	if err != nil {
+		return "", WorkspaceFile{}, err
+	}
+
+	targetPath := filepath.Join(workspacePath, name)
+
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", WorkspaceFile{}, ErrWorkspaceFileNotFound
+		}
+		return "", WorkspaceFile{}, err
+	}
+
+	if info.IsDir() {
+		return "", WorkspaceFile{}, ErrWorkspaceItemIsDir
+	}
+
+	return targetPath, WorkspaceFile{
+		Name:      name,
+		Path:      "/workspace/" + name,
+		SizeBytes: info.Size(),
+		IsDir:     false,
+		ModTime:   info.ModTime(),
+	}, nil
 }
