@@ -57,7 +57,7 @@ func (p *TerminalProvider) ListTools(ctx context.Context, user service.UserConte
 	return []service.ToolDefinition{
 		{
 			Name:        ToolTerminalOpen,
-			Description: "打开当前会话的临时终端容器。用户上传文件和需要保留的文件位于 /workspace。",
+			Description: "打开或重新打开当前会话的临时终端容器。容器可能因空闲超时被回收；/workspace 会保留用户上传文件和需要保留的生成文件。如果容器因超时被销毁，容器内其他位置以及临时安装的软件包不会保留。",
 			Parameters: json.RawMessage(`{
                 "type": "object",
                 "properties": {},
@@ -66,7 +66,7 @@ func (p *TerminalProvider) ListTools(ctx context.Context, user service.UserConte
 		},
 		{
 			Name:        ToolTerminalExec,
-			Description: "在已打开的当前会话终端容器中执行一条 shell 命令。每次调用都是新的 shell；如果需要进入子目录，请在命令中使用 cd，例如 cd project && npm test。需要在后续消息继续使用、需要用户下载、或需要保留的文件必须写入 /workspace；容器内其他位置可能随容器销毁而丢失。",
+			Description: "在已打开的当前会话终端容器中执行一条 shell 命令。如果返回 terminal_not_open，先重新打开终端容器再重试命令。每次调用都是新的 shell；如果需要进入子目录，请在命令中使用 cd，例如 cd project && npm test。容器是临时环境，如果因超时被销毁，临时安装的软件包不会保留。需要在后续消息继续使用、需要用户下载、或需要保留的文件必须写入 /workspace；容器内其他位置可能随容器销毁而丢失。",
 			Parameters: json.RawMessage(`{
                 "type": "object",
                 "properties": {
