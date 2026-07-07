@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -59,6 +60,19 @@ func (m *WorkspaceManager) EnsureWorkspace(userID int64, conversationID string) 
 		return "", err
 	}
 	return path, nil
+}
+
+func (m *WorkspaceManager) DeleteConversation(ctx context.Context, userID int64, conversationID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	path := filepath.Join(
+		m.dataRoot,
+		strconv.FormatInt(userID, 10),
+		conversationID,
+	)
+	return os.RemoveAll(path)
 }
 
 func cleanFileName(name string) (string, error) {

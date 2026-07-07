@@ -66,12 +66,41 @@ func main() {
 	authHandler := handler.NewAuthHandler(authService)
 
 	conversationRepo := repository.NewConversationRepository(mysqlDB)
-	conversationService := service.NewConversationService(conversationRepo)
-	conversationHandler := handler.NewConversationHandler(conversationService)
 	workspaceManager, err := sandbox.NewWorkspaceManager(cfg.SandboxDataRoot)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	var sandboxManager *sandbox.Manager
+	if cfg.SandboxEnabled {
+		dockerRunner := sandbox.NewDockerRunner(cfg.SandboxImage)
+
+		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := dockerRunner.Check(checkCtx); err != nil {
+			cancel()
+			log.Fatal(err)
+		}
+		cancel()
+
+		sandboxManager = sandbox.NewManager(
+			workspaceManager,
+			dockerRunner,
+			time.Duration(cfg.SandboxIdleTimeoutSeconds)*time.Second,
+		)
+		go func() {
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+
+			for range ticker.C {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				sandboxManager.CleanupExpired(cleanupCtx)
+				cancel()
+			}
+		}()
+	}
+
+	conversationService := service.NewConversationService(conversationRepo, workspaceManager, sandboxManager)
+	conversationHandler := handler.NewConversationHandler(conversationService)
 	workspaceService := service.NewWorkspaceService(conversationService, workspaceManager)
 	workspaceHandler := handler.NewWorkspaceHandler(workspaceService)
 
@@ -113,32 +142,7 @@ func main() {
 		}),
 	}
 
-	if cfg.SandboxEnabled {
-		dockerRunner := sandbox.NewDockerRunner(cfg.SandboxImage)
-
-		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := dockerRunner.Check(checkCtx); err != nil {
-			cancel()
-			log.Fatal(err)
-		}
-		cancel()
-
-		sandboxManager := sandbox.NewManager(
-			workspaceManager,
-			dockerRunner,
-			time.Duration(cfg.SandboxIdleTimeoutSeconds)*time.Second,
-		)
-		go func() {
-			ticker := time.NewTicker(time.Minute)
-			defer ticker.Stop()
-
-			for range ticker.C {
-				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				sandboxManager.CleanupExpired(cleanupCtx)
-				cancel()
-			}
-		}()
-
+	if sandboxManager != nil {
 		toolProviders = append(toolProviders, tool.NewTerminalProvider(sandboxManager))
 	}
 

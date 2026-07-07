@@ -107,6 +107,23 @@ func (m *Manager) Exec(
 	return m.runner.Exec(ctx, userID, conversationID, input)
 }
 
+func (m *Manager) Destroy(ctx context.Context, userID int64, conversationID string) error {
+	destroyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	err := m.runner.Destroy(destroyCtx, userID, conversationID)
+	cancel()
+	if err != nil {
+		return err
+	}
+
+	key := terminalKey{userID: userID, conversationID: conversationID}
+
+	m.mu.Lock()
+	delete(m.activeTerminals, key)
+	m.mu.Unlock()
+
+	return nil
+}
+
 // 清理逻辑 lazy heap + map
 
 func (m *Manager) touchTerminal(userID int64, conversationID string, ttl time.Duration) {
