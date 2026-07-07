@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"io"
+	"os"
 
 	"github.com/AlexMeiko/guchat/internal/sandbox"
 )
@@ -20,8 +21,8 @@ type SaveWorkspaceFileInput struct {
 }
 
 type ResolveWorkspaceFileResult struct {
-	HostPath string
-	Name     string
+	File *os.File
+	Info sandbox.WorkspaceFile
 }
 
 func NewWorkspaceService(
@@ -87,13 +88,13 @@ func (s *WorkspaceService) ResolveFile(
 		return nil, err
 	}
 
-	hostPath, file, err := s.workspaceManager.ResolveFilePath(userID, conversationID, name)
+	file, info, err := s.workspaceManager.OpenFile(userID, conversationID, name)
 	if err != nil {
 		return nil, err
 	}
 
 	return &ResolveWorkspaceFileResult{
-		HostPath: hostPath,
-		Name:     file.Name,
+		File: file,
+		Info: info,
 	}, nil
 }

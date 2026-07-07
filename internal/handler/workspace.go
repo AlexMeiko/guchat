@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"mime"
 	"net/http"
 
 	"github.com/AlexMeiko/guchat/internal/model"
@@ -93,6 +94,8 @@ func (h *WorkspaceHandler) Upload(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid file name"})
 		case errors.Is(err, sandbox.ErrFileExists):
 			c.JSON(http.StatusConflict, model.ErrorResponse{Error: "file already exists"})
+		case errors.Is(err, sandbox.ErrWorkspaceItemNotRegular):
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "cannot overwrite non-regular file"})
 		default:
 			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: "internal server error"})
 		}
@@ -167,13 +170,27 @@ func (h *WorkspaceHandler) Download(c *gin.Context) {
 			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "file not found"})
 		case errors.Is(err, sandbox.ErrWorkspaceItemIsDir):
 			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "cannot download directory"})
+		case errors.Is(err, sandbox.ErrWorkspaceItemNotRegular):
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "cannot download non-regular file"})
 		default:
 			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: "internal server error"})
 		}
 		return
 	}
 
-	c.FileAttachment(result.HostPath, result.Name)
+	defer result.File.Close()
+
+	c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{
+		"filename": result.Info.Name,
+	}))
+
+	http.ServeContent(
+		c.Writer,
+		c.Request,
+		result.Info.Name,
+		result.Info.ModTime,
+		result.File,
+	)
 }
 
 func newWorkspaceFileResponse(file sandbox.WorkspaceFile) model.WorkspaceFileResponse {

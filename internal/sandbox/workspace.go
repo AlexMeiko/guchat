@@ -16,6 +16,7 @@ var ErrInvalidFileName = errors.New("invalid file name")
 var ErrFileExists = errors.New("file already exists")
 var ErrWorkspaceFileNotFound = errors.New("workspace file not found")
 var ErrWorkspaceItemIsDir = errors.New("workspace item is directory")
+var ErrWorkspaceItemNotRegular = errors.New("workspace item is not regular file")
 
 type WorkspaceFile struct {
 	Name      string
@@ -103,14 +104,12 @@ func (m *WorkspaceManager) SaveFile(
 
 	targetPath := filepath.Join(workspacePath, name)
 
-	flags := os.O_WRONLY | os.O_CREATE
+	var file *os.File
 	if overwrite {
-		flags |= os.O_TRUNC
+		file, err = openRegularForWriteNoFollow(targetPath, 0644)
 	} else {
-		flags |= os.O_EXCL
+		file, err = os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	}
-
-	file, err := os.OpenFile(targetPath, flags, 0644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil, ErrFileExists
@@ -190,36 +189,29 @@ func (m *WorkspaceManager) DeleteItem(userID int64, conversationID string, name 
 	return os.RemoveAll(targetPath)
 }
 
-func (m *WorkspaceManager) ResolveFilePath(
+func (m *WorkspaceManager) OpenFile(
 	userID int64,
 	conversationID string,
 	name string,
-) (string, WorkspaceFile, error) {
+) (*os.File, WorkspaceFile, error) {
 	name, err := cleanFileName(name)
 	if err != nil {
-		return "", WorkspaceFile{}, err
+		return nil, WorkspaceFile{}, err
 	}
 
 	workspacePath, err := m.EnsureWorkspace(userID, conversationID)
 	if err != nil {
-		return "", WorkspaceFile{}, err
+		return nil, WorkspaceFile{}, err
 	}
 
 	targetPath := filepath.Join(workspacePath, name)
 
-	info, err := os.Stat(targetPath)
+	file, info, err := openRegularNoFollow(targetPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", WorkspaceFile{}, ErrWorkspaceFileNotFound
-		}
-		return "", WorkspaceFile{}, err
+		return nil, WorkspaceFile{}, err
 	}
 
-	if info.IsDir() {
-		return "", WorkspaceFile{}, ErrWorkspaceItemIsDir
-	}
-
-	return targetPath, WorkspaceFile{
+	return file, WorkspaceFile{
 		Name:      name,
 		Path:      "/workspace/" + name,
 		SizeBytes: info.Size(),
