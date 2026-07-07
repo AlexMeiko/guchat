@@ -42,6 +42,8 @@ func (r *DockerRunner) Open(ctx context.Context, input OpenInput) error {
 		"--memory", "512m",
 		"--cpus", "1",
 		"--pids-limit", "128",
+		"--cap-drop", "NET_RAW",
+		"--cap-drop", "MKNOD",
 		"--security-opt", "no-new-privileges",
 		"-v", input.WorkspacePath + ":/workspace",
 		"-w", "/workspace",
