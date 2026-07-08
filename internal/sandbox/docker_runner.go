@@ -15,6 +15,40 @@ type DockerRunner struct {
 	image string
 }
 
+const execOutputLimitBytes = 32 * 1024
+
+type cappedBuffer struct {
+	bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func newCappedBuffer(limit int) *cappedBuffer {
+	return &cappedBuffer{limit: limit}
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if b.limit <= 0 {
+		b.truncated = true
+		return len(p), nil
+	}
+
+	remaining := b.limit - b.Buffer.Len()
+	if remaining <= 0 {
+		b.truncated = true
+		return len(p), nil
+	}
+
+	if len(p) > remaining {
+		_, _ = b.Buffer.Write(p[:remaining])
+		b.truncated = true
+		return len(p), nil
+	}
+
+	_, _ = b.Buffer.Write(p)
+	return len(p), nil
+}
+
 func NewDockerRunner(image string) *DockerRunner {
 	return &DockerRunner{image: image}
 }
@@ -75,19 +109,20 @@ func (r *DockerRunner) Exec(
 
 	cmd := exec.CommandContext(execCtx, "docker", "exec", name, "sh", "-c", input.Command)
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := newCappedBuffer(execOutputLimitBytes)
+	stderr := newCappedBuffer(execOutputLimitBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	err = cmd.Run()
 	duration := time.Since(startedAt)
 
 	result := &ExecResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		Duration: duration,
-		TimedOut: errors.Is(execCtx.Err(), context.DeadlineExceeded),
+		Stdout:    stdout.String(),
+		Stderr:    stderr.String(),
+		Duration:  duration,
+		TimedOut:  errors.Is(execCtx.Err(), context.DeadlineExceeded),
+		Truncated: stdout.truncated || stderr.truncated,
 	}
 
 	if err == nil {
