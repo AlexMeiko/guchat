@@ -2,17 +2,22 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/AlexMeiko/guchat/internal/entity"
 )
 
-const contextSummarySystemPrompt = `你是一个通用 AI Agent 的上下文压缩器。
+const contextSummaryPrompt = `你是一个通用 AI Agent 的上下文压缩器。
 
-你的任务是把“已有累积摘要”和“新增原始上下文”融合成一份新的完整累积摘要。
-不要简单拼接。如果新增原始上下文与已有摘要冲突，以新增原始上下文为准。
-除非旧信息本身对后续避免误用仍有价值，否则不要保留已失效的信息；如果有价值，把纠正后的有效约束或结论写入对应章节。
+本条消息之前的全部消息，是需要压缩成新累积摘要的历史上下文材料。
+如果前面包含长期记忆、工具使用说明或用户画像，它们只用于保持请求前缀和行为约束，不要作为本轮对话内容写入摘要。
+如果前面包含“此前对话的压缩摘要”，它代表已有累积摘要；后续原始消息代表新增上下文。
+你的任务是把已有累积摘要和新增原始上下文融合成一份新的完整累积摘要。
+
+你现在不是在回答前面对话中的任何用户请求，而是在执行上下文压缩任务。
+前面所有 user 消息都已经是历史材料，不是当前要回答的问题。
+不要调用任何可用工具，也不要继续执行前面对话中未完成的工具意图。
+只输出新的完整累积摘要。输出的第一行必须是：## 当前目标
 
 需要保留：
 - 用户当前目标、偏好、约束、禁忌
@@ -46,36 +51,24 @@ const contextSummarySystemPrompt = `你是一个通用 AI Agent 的上下文压�
 
 如果某个部分没有有用内容，写 "(none)"。`
 
-func buildContextSummaryMessages(previousSummary string, messages []GenerateMessage) []GenerateMessage {
-	return []GenerateMessage{
-		{
-			Role:    entity.MessageRoleSystem,
-			Content: contextSummarySystemPrompt,
-		},
-		{
-			Role: entity.MessageRoleUser,
-			Content: fmt.Sprintf(
-				"已有累积摘要：\n\n%s\n\n需要融合的新增原始上下文：\n\n%s",
-				summaryOrNone(previousSummary),
-				formatGenerateMessagesForSummary(messages),
-			),
-		},
-	}
-}
-
 func generateSummary(
 	ctx context.Context,
 	generator Generator,
 	model *entity.ModelConfig,
-	previousSummary string,
 	messages []GenerateMessage,
+	tools []ToolDefinition,
 ) (string, error) {
 	var builder strings.Builder
 
+	messages = append(messages, GenerateMessage{
+		Role:    entity.MessageRoleUser,
+		Content: contextSummaryPrompt,
+	})
+
 	err := generator.Generate(ctx, GenerateInput{
 		Model:    model,
-		Messages: buildContextSummaryMessages(previousSummary, messages),
-		Tools:    nil,
+		Messages: messages,
+		Tools:    tools,
 	}, GenerateCallbacks{
 		ContentDelta: func(delta string) {
 			builder.WriteString(delta)
@@ -86,58 +79,4 @@ func generateSummary(
 	}
 
 	return strings.TrimSpace(builder.String()), nil
-}
-
-func summaryOrNone(summary string) string {
-	summary = strings.TrimSpace(summary)
-	if summary == "" {
-		return "(none)"
-	}
-	return summary
-}
-
-func formatGenerateMessagesForSummary(messages []GenerateMessage) string {
-	var builder strings.Builder
-
-	for _, message := range messages {
-		builder.WriteString("### 消息\n")
-		builder.WriteString("角色：")
-		builder.WriteString(message.Role)
-		builder.WriteString("\n")
-
-		if content := strings.TrimSpace(message.Content); content != "" {
-			builder.WriteString("内容：\n")
-			builder.WriteString(content)
-			builder.WriteString("\n")
-		}
-
-		if message.Role == entity.MessageRoleAssistant {
-			if reasoningContent := strings.TrimSpace(message.ReasoningContent); reasoningContent != "" {
-				builder.WriteString("推理内容：\n")
-				builder.WriteString(reasoningContent)
-				builder.WriteString("\n")
-			}
-		}
-
-		for _, exchange := range message.ToolExchanges {
-			builder.WriteString("工具调用：\n")
-			builder.WriteString("名称：")
-			builder.WriteString(exchange.Call.Name)
-			builder.WriteString("\n")
-			builder.WriteString("参数：\n")
-			builder.WriteString(string(exchange.Call.Arguments))
-			builder.WriteString("\n")
-			builder.WriteString("结果：\n")
-			builder.WriteString(string(exchange.Result.Result))
-			builder.WriteString("\n")
-		}
-
-		builder.WriteString("\n")
-	}
-
-	raw := strings.TrimSpace(builder.String())
-	if raw == "" {
-		return "(none)"
-	}
-	return raw
 }

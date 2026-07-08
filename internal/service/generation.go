@@ -295,7 +295,7 @@ func (s *GenerationService) Process(
 	var tools []ToolDefinition
 	if toolMode == ToolModeAuto {
 		tools, err = s.toolProviderManager.ListTools(ctx, UserContext{
-			UserID: userID,
+			UserID:         userID,
 			ConversationID: conversationID,
 		})
 		if err != nil {
@@ -322,7 +322,19 @@ func (s *GenerationService) Process(
 		nextTokens := estimateGenerateMessageTokens(nextMessage)
 
 		if toolsTokens+memoryTokens+summaryTokens+bufferTokens+nextTokens > triggerTokens && len(buffer) > 0 {
-			summary, err := generateSummary(ctx, generator, modelConfig, workingSummary, buffer)
+			summaryMessages := make([]GenerateMessage, 0, len(buffer)+3)
+
+			if promptMemoryMessage != nil {
+				summaryMessages = append(summaryMessages, *promptMemoryMessage)
+			}
+
+			if summaryMessage := newSummaryGenerateMessage(workingSummary); summaryMessage != nil {
+				summaryMessages = append(summaryMessages, *summaryMessage)
+			}
+
+			summaryMessages = append(summaryMessages, buffer...)
+
+			summary, err := generateSummary(ctx, generator, modelConfig, summaryMessages, tools)
 			if err != nil {
 				return fail(err)
 			}

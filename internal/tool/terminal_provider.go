@@ -57,7 +57,7 @@ func (p *TerminalProvider) ListTools(ctx context.Context, user service.UserConte
 	return []service.ToolDefinition{
 		{
 			Name:        ToolTerminalOpen,
-			Description: "打开或重新打开当前会话的临时终端容器。容器可能因空闲超时被回收；/workspace 会保留用户上传文件和需要保留的生成文件。如果容器因超时被销毁，容器内其他位置以及临时安装的软件包不会保留。",
+			Description: "打开或重新打开当前会话的临时终端容器。容器可能因空闲超时被回收；/workspace 会保留用户上传文件和需要保留的生成文件。如果容器因超时被销毁，容器内其他位置以及临时安装的软件包不会保留。如需查看完整环境说明，可执行 cat /etc/guchat-sandbox-capabilities.txt (如果有的话)。",
 			Parameters: json.RawMessage(`{
                 "type": "object",
                 "properties": {},
@@ -81,7 +81,7 @@ func (p *TerminalProvider) ListTools(ctx context.Context, user service.UserConte
                 },
                 "required": ["command"],
                 "additionalProperties": false
-            }`),
+			}`),
 		},
 	}, nil
 }
