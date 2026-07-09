@@ -14,10 +14,13 @@ import (
 const (
 	ToolTerminalOpen = "terminal_open"
 	ToolTerminalExec = "terminal_exec"
+
+	sandboxDescriptionPath = "/etc/guchat-sandbox-capabilities.txt"
 )
 
 type terminalOpenResult struct {
-	OK bool `json:"ok"`
+	OK          bool   `json:"ok"`
+	Description string `json:"description,omitempty"`
 }
 
 type terminalExecArgs struct {
@@ -57,7 +60,7 @@ func (p *TerminalProvider) ListTools(ctx context.Context, user service.UserConte
 	return []service.ToolDefinition{
 		{
 			Name:        ToolTerminalOpen,
-			Description: "打开或重新打开当前会话的临时终端容器。容器可能因空闲超时被回收；/workspace 会保留用户上传文件和需要保留的生成文件。如果容器因超时被销毁，容器内其他位置以及临时安装的软件包不会保留。如需查看完整环境说明，可执行 cat /etc/guchat-sandbox-capabilities.txt (如果有的话)。",
+			Description: "打开或重新打开当前会话的临时终端容器。容器可能因空闲超时被回收；/workspace 会保留用户上传文件和需要保留的生成文件。如果容器因超时被销毁，容器内其他位置以及临时安装的软件包不会保留。如果打开结果包含 description 字段，应优先遵循其中的环境和文件编辑要求。",
 			Parameters: json.RawMessage(`{
                 "type": "object",
                 "properties": {},
@@ -106,9 +109,22 @@ func (p *TerminalProvider) openTerminal(ctx context.Context, user service.UserCo
 		return service.ToolResult{}, err
 	}
 
-	return marshalTerminalToolResult(ToolTerminalOpen, terminalOpenResult{
+	result := terminalOpenResult{
 		OK: true,
+	}
+
+	description, err := p.manager.Exec(ctx, user.UserID, user.ConversationID, sandbox.ExecInput{
+		Command: "if [ -r " + sandboxDescriptionPath + " ]; then cat " + sandboxDescriptionPath + "; fi",
+		Timeout: 5 * time.Second,
 	})
+	if err == nil && description.ExitCode == 0 {
+		content := strings.TrimSpace(description.Stdout)
+		if content != "" {
+			result.Description = content
+		}
+	}
+
+	return marshalTerminalToolResult(ToolTerminalOpen, result)
 }
 
 func (p *TerminalProvider) execTerminal(ctx context.Context, user service.UserContext, args json.RawMessage) (service.ToolResult, error) {
