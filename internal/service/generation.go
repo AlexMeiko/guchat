@@ -322,42 +322,58 @@ func (s *GenerationService) Process(
 		nextTokens := estimateGenerateMessageTokens(nextMessage)
 
 		if toolsTokens+memoryTokens+summaryTokens+bufferTokens+nextTokens > triggerTokens && len(buffer) > 0 {
-			summaryMessages := make([]GenerateMessage, 0, len(buffer)+3)
-
-			if promptMemoryMessage != nil {
-				summaryMessages = append(summaryMessages, *promptMemoryMessage)
+			summaryEnd := len(buffer)
+			if buffer[summaryEnd-1].Role != entity.MessageRoleAssistant {
+				summaryEnd = 0
+				for i := len(buffer) - 1; i >= 0; i-- {
+					if buffer[i].Role == entity.MessageRoleAssistant {
+						summaryEnd = i + 1
+						break
+					}
+				}
 			}
 
-			if summaryMessage := newSummaryGenerateMessage(workingSummary); summaryMessage != nil {
-				summaryMessages = append(summaryMessages, *summaryMessage)
+			if summaryEnd > 0 {
+				summaryMessages := make([]GenerateMessage, 0, summaryEnd+2)
+
+				if promptMemoryMessage != nil {
+					summaryMessages = append(summaryMessages, *promptMemoryMessage)
+				}
+
+				if summaryMessage := newSummaryGenerateMessage(workingSummary); summaryMessage != nil {
+					summaryMessages = append(summaryMessages, *summaryMessage)
+				}
+
+				summaryMessages = append(summaryMessages, buffer[:summaryEnd]...)
+
+				summary, err := generateSummary(ctx, generator, modelConfig, summaryMessages, tools)
+				if err != nil {
+					return fail(err)
+				}
+
+				last := buffer[summaryEnd-1]
+				if err := s.messageService.UpdateSummaryContentByIDAndConversationID(
+					ctx,
+					userID,
+					conversationID,
+					last.ID,
+					summary,
+				); err != nil {
+					return fail(err)
+				}
+
+				workingSummary = summary
+				summaryTokens = 0
+				if summaryMessage := newSummaryGenerateMessage(workingSummary); summaryMessage != nil {
+					summaryTokens = estimateGenerateMessageTokens(*summaryMessage)
+				}
+
+				buffer = append(buffer[:0], buffer[summaryEnd:]...)
+				bufferTokens = 0
+				for _, retainedMessage := range buffer {
+					bufferTokens += estimateGenerateMessageTokens(retainedMessage)
+				}
 			}
-
-			summaryMessages = append(summaryMessages, buffer...)
-
-			summary, err := generateSummary(ctx, generator, modelConfig, summaryMessages, tools)
-			if err != nil {
-				return fail(err)
-			}
-
-			last := buffer[len(buffer)-1]
-			if err := s.messageService.UpdateSummaryContentByIDAndConversationID(
-				ctx,
-				userID,
-				conversationID,
-				last.ID,
-				summary,
-			); err != nil {
-				return fail(err)
-			}
-
-			workingSummary = summary
-			summaryTokens = 0
-			if summaryMessage := newSummaryGenerateMessage(workingSummary); summaryMessage != nil {
-				summaryTokens = estimateGenerateMessageTokens(*summaryMessage)
-			}
-
-			buffer = buffer[:0]
-			bufferTokens = 0
 		}
 
 		buffer = append(buffer, nextMessage)
