@@ -198,7 +198,7 @@ func (m *Manager) CleanupExpired(ctx context.Context) {
 			continue
 		}
 
-		if !state.expiresAt.Equal(item.expiresAt) {
+		if state.expiresAt.After(item.expiresAt) {
 			heap.Push(&m.expireHeap, terminalExpireItem{
 				key:       item.key,
 				expiresAt: state.expiresAt,
@@ -218,9 +218,13 @@ func (m *Manager) CleanupExpired(ctx context.Context) {
 		}
 
 		if err := m.runner.Destroy(ctx, item.key.userID, item.key.conversationID); err != nil {
+			expiresAt := state.expiresAt
+			if next, ok := m.expireHeap.Peek(); ok {
+				expiresAt = next.expiresAt.Add(1)
+			}
 			heap.Push(&m.expireHeap, terminalExpireItem{
 				key:       item.key,
-				expiresAt: state.expiresAt,
+				expiresAt: expiresAt,
 			})
 			return
 		}
