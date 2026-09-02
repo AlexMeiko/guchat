@@ -167,3 +167,54 @@ func (r *DockerRunner) Check(ctx context.Context) error {
 	}
 	return nil
 }
+
+func (r *DockerRunner) List(ctx context.Context) ([]terminalKey, error) {
+	cmd := exec.CommandContext(ctx, "docker", "ps", "-a",
+		"--filter", "name=guchat-sbx-u",
+		"--format", "{{.ID}} {{.Names}} {{.State}}")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("list sandbox containers: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	var terminals []terminalKey
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			continue
+		}
+
+		id, name, state := fields[0], fields[1], fields[2]
+		key, ok := parseContainerName(name)
+		if !ok {
+			continue
+		}
+		if state != "running" {
+			_ = exec.CommandContext(ctx, "docker", "rm", "-f", id).Run()
+			continue
+		}
+
+		terminals = append(terminals, key)
+	}
+
+	return terminals, nil
+}
+
+func parseContainerName(name string) (terminalKey, bool) {
+	rest, ok := strings.CutPrefix(name, "guchat-sbx-u")
+	if !ok {
+		return terminalKey{}, false
+	}
+
+	userIDPart, conversationID, ok := strings.Cut(rest, "-")
+	if !ok {
+		return terminalKey{}, false
+	}
+
+	userID, err := strconv.ParseInt(userIDPart, 10, 64)
+	if err != nil {
+		return terminalKey{}, false
+	}
+
+	return terminalKey{userID: userID, conversationID: conversationID}, true
+}

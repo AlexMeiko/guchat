@@ -87,6 +87,14 @@ func main() {
 			dockerRunner,
 			time.Duration(cfg.SandboxIdleTimeoutSeconds)*time.Second,
 		)
+
+		adoptCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := sandboxManager.AdoptExisting(adoptCtx); err != nil {
+			cancel()
+			log.Fatal(err)
+		}
+		cancel()
+
 		go func() {
 			ticker := time.NewTicker(time.Minute)
 			defer ticker.Stop()

@@ -38,6 +38,7 @@ type Runner interface {
 	Open(ctx context.Context, input OpenInput) error
 	Exec(ctx context.Context, userID int64, conversationID string, input ExecInput) (*ExecResult, error)
 	Destroy(ctx context.Context, userID int64, conversationID string) error
+	List(ctx context.Context) ([]terminalKey, error)
 }
 
 type OpenInput struct {
@@ -235,4 +236,20 @@ func (m *Manager) CleanupExpired(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (m *Manager) AdoptExisting(ctx context.Context) error {
+	terminals, err := m.runner.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, key := range terminals {
+		m.mu.Lock()
+		_, exists := m.activeTerminals[key]
+		m.mu.Unlock()
+		if !exists {
+			m.touchTerminal(key.userID, key.conversationID, m.idleTimeout)
+		}
+	}
+	return nil
 }
