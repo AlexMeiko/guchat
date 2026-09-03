@@ -10,10 +10,6 @@ import (
 
 var ErrTerminalNotOpen = errors.New("terminal not open")
 
-const (
-	terminalCleanupBudget = 5 * time.Second
-)
-
 type terminalState struct {
 	expiresAt time.Time
 	running   int
@@ -180,12 +176,14 @@ func (m *Manager) markTerminalDone(userID int64, conversationID string, ttl time
 }
 
 func (m *Manager) CleanupExpired(ctx context.Context) {
-	deadline := time.Now().Add(terminalCleanupBudget)
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+
 		now := time.Now()
 		item, ok := m.expireHeap.Peek()
 		if !ok || now.Before(item.expiresAt) {
@@ -219,22 +217,14 @@ func (m *Manager) CleanupExpired(ctx context.Context) {
 		}
 
 		if err := m.runner.Destroy(ctx, item.key.userID, item.key.conversationID); err != nil {
-			expiresAt := state.expiresAt
-			if next, ok := m.expireHeap.Peek(); ok {
-				expiresAt = next.expiresAt.Add(1)
-			}
 			heap.Push(&m.expireHeap, terminalExpireItem{
 				key:       item.key,
-				expiresAt: expiresAt,
+				expiresAt: time.Now().Add(time.Minute),
 			})
-			return
+			continue
 		}
 
 		delete(m.activeTerminals, item.key)
-
-		if time.Now().After(deadline) {
-			return
-		}
 	}
 }
 
