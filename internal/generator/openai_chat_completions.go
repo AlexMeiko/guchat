@@ -1,7 +1,6 @@
 package generator
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -253,9 +252,6 @@ func buildOpenAIChatCompletionMessages(
 }
 
 func streamOpenAIChatCompletion(body io.Reader, cb service.GenerateCallbacks) error {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
-
 	dataLines := make([]string, 0, 4)
 	toolCalls := make([]openAIChatToolCallAccumulator, 0)
 	toolCallsEmitted := false
@@ -332,25 +328,19 @@ func streamOpenAIChatCompletion(body io.Reader, cb service.GenerateCallbacks) er
 		return nil
 	}
 
-	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), "\r")
-
+	if err := forEachSSELine(body, func(line string) error {
 		if line == "" {
-			if err := flushEvent(); err != nil {
-				if errors.Is(err, errOpenAIStreamDone) {
-					return nil
-				}
-				return err
-			}
-			continue
+			return flushEvent()
 		}
 
 		if strings.HasPrefix(line, "data:") {
 			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
+		return nil
+	}); err != nil {
+		if errors.Is(err, errOpenAIStreamDone) {
+			return nil
+		}
 		return err
 	}
 

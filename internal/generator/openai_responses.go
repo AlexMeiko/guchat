@@ -1,7 +1,6 @@
 package generator
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -139,9 +138,6 @@ type openAIResponsesEvent struct {
 }
 
 func streamOpenAIResponses(body io.ReadCloser, cb service.GenerateCallbacks) error {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
-
 	dataLines := make([]string, 0, 4)
 	var event string
 
@@ -189,26 +185,20 @@ func streamOpenAIResponses(body io.ReadCloser, cb service.GenerateCallbacks) err
 		return nil
 	}
 
-	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), "\r")
-
+	if err := forEachSSELine(body, func(line string) error {
 		switch {
 		case line == "":
-			if err := flushEvent(); err != nil {
-				if errors.Is(err, errOpenAIStreamDone) {
-					return nil
-				}
-				return err
-			}
+			return flushEvent()
 		case strings.HasPrefix(line, "event:"):
-			event = strings.TrimPrefix(line, "event:")
-			event = strings.TrimSpace(event)
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
 			dataLines = append(dataLines, strings.TrimPrefix(line, "data:"))
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
+		return nil
+	}); err != nil {
+		if errors.Is(err, errOpenAIStreamDone) {
+			return nil
+		}
 		return err
 	}
 
