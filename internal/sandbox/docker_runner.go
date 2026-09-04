@@ -72,6 +72,7 @@ func (r *DockerRunner) Open(ctx context.Context, input OpenInput) error {
 
 	args := []string{
 		"run", "-d",
+		"--pull", "never",
 		"--name", name,
 		"--memory", "512m",
 		"--cpus", "1",
@@ -164,6 +165,20 @@ func (r *DockerRunner) Check(ctx context.Context) error {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("docker is not available: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func (r *DockerRunner) EnsureImage(ctx context.Context) error {
+	inspect := exec.CommandContext(ctx, "docker", "image", "inspect", r.image)
+	if err := inspect.Run(); err == nil {
+		return nil
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", "pull", r.image)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pull sandbox image %s: %w: %s", r.image, err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }

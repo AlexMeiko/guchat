@@ -82,6 +82,13 @@ func main() {
 		}
 		cancel()
 
+		pullCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		if err := dockerRunner.EnsureImage(pullCtx); err != nil {
+			cancel()
+			log.Fatal(err)
+		}
+		cancel()
+
 		sandboxManager = sandbox.NewManager(
 			workspaceManager,
 			dockerRunner,
