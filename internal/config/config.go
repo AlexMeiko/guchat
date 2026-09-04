@@ -103,7 +103,7 @@ func Load() (Config, error) {
 
 		SandboxEnabled:            getEnvBool("SANDBOX_ENABLED", false),
 		SandboxDataRoot:           strings.TrimSpace(getEnv("SANDBOX_DATA_ROOT", "./data/sandbox")),
-		SandboxImage:              strings.TrimSpace(getEnv("SANDBOX_IMAGE", "debian:bookworm-slim")),
+		SandboxImage:              strings.TrimSpace(getEnv("SANDBOX_IMAGE", "tanhao2015/guchat-sandbox:bookworm-v1.1")),
 		SandboxIdleTimeoutSeconds: max(getEnvInt64("SANDBOX_IDLE_TIMEOUT_SECONDS", 1800), 1),
 
 		TavilyAPIKey:              strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
