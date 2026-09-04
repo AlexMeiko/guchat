@@ -14,6 +14,7 @@ func New(
 	memoryHandler *handler.MemoryHandler,
 	modelHandler *handler.ModelHandler,
 	generationHandler *handler.GenerationHandler,
+	workspaceHandler *handler.WorkspaceHandler,
 	jwtService *service.JWTService,
 ) *gin.Engine {
 	r := gin.Default()
@@ -48,6 +49,11 @@ func New(
 
 			conversation.POST("/:conversation_id/messages/:message_id/generation", generationHandler.Create)
 			conversation.GET("/:conversation_id/messages/:message_id/events", generationHandler.Events)
+
+			conversation.POST("/:conversation_id/files", workspaceHandler.Upload)
+			conversation.GET("/:conversation_id/files", workspaceHandler.List)
+			conversation.DELETE("/:conversation_id/files", workspaceHandler.Delete)
+			conversation.GET("/:conversation_id/files/download", workspaceHandler.Download)
 
 		}
 

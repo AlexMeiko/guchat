@@ -1,6 +1,6 @@
 # guchat
 
-`guchat` 是一个使用 Go + Gin 实现的 AI 聊天后端服务，提供用户鉴权、会话管理、消息管理、模型配置、AI 流式生成、工具调用、记忆 RAG、上下文摘要压缩与 SSE 事件推送能力。项目目标是用清晰的分层结构实现一个可运行、可联调、便于维护的聊天后端。
+`guchat` 是一个使用 Go + Gin 实现的 AI 聊天后端服务，提供用户鉴权、会话管理、消息管理、模型配置、AI 流式生成、工具调用、记忆 RAG、上下文摘要压缩、SSE 事件推送，以及可选的 Docker 终端沙箱与会话工作区。项目目标是用清晰的分层结构实现一个可运行、可联调、便于维护的聊天后端。
 
 ## 功能特性
 
@@ -12,6 +12,7 @@
 - 支持 OpenAI Chat Completions、Responses API 和本地 `fake` 生成器
 - 支持模型配置管理，可动态启用或停用模型
 - 支持内置工具调用、记忆工具和 MCP 工具扩展，MCP 可通过 HTTP 或 stdio 接入
+- 支持可选 Docker 终端沙箱：模型可调用 `terminal_open` / `terminal_exec` 在隔离容器中执行命令，会话文件通过工作区接口上传下载
 - 支持私有记忆管理、基础记忆默认注入、MySQL 记忆检索和可选 Qdrant 向量检索
 - 采用 Handler / Service / Repository 分层结构，便于维护和扩展
 
@@ -23,6 +24,7 @@
 - sqlx + go-sql-driver/mysql
 - golang-jwt/jwt
 - godotenv
+- Docker（仅在启用沙箱时需要）
 
 ## 项目结构
 
@@ -40,6 +42,7 @@
 │   ├── model                  # 请求/响应模型
 │   ├── repository             # 数据访问层
 │   ├── router                 # 路由注册
+│   ├── sandbox                # Docker 终端沙箱与会话工作区
 │   ├── service                # 业务逻辑层
 │   ├── stream                 # SSE 运行时管理
 │   └── tool                   # 内置工具与 MCP 工具接入
@@ -58,6 +61,7 @@
 
 - Go `1.25.0+`
 - MySQL `5.7+` 或兼容版本
+- Docker（仅当 `SANDBOX_ENABLED=true` 时需要；运行用户需能访问 Docker daemon）
 
 说明：当前 Go 最低版本由依赖约束决定，`gin v1.12.0` 要求 Go `1.25.0`。数据库侧未使用 MySQL 8.0 专属语法，MySQL `5.7+` 即可满足当前表结构和查询需求。
 
@@ -110,6 +114,11 @@ GENERATION_RETRY_MAX=5
 CONTEXT_TOKEN_LIMIT=256000
 CONTEXT_COMPRESS_RATIO=0.8
 GENERATION_MAX_TOOL_ROUNDS=12
+SANDBOX_ENABLED=false
+SANDBOX_DATA_ROOT=./data/sandbox
+SANDBOX_IMAGE=tanhao2015/guchat-sandbox:bookworm-v1.1
+SANDBOX_IDLE_TIMEOUT_SECONDS=1800
+SANDBOX_UPLOAD_MAX_BYTES=104857600
 TAVILY_API_KEY=
 TAVILY_BASE_URL=https://api.tavily.com
 EMBEDDING_PROVIDER=openai
@@ -229,6 +238,7 @@ curl -X POST "http://localhost:8080/api/admin/models" \
 - `add_memory`：写入当前用户的 user / conversation scope 记忆
 - `disable_memory`：禁用当前用户自己的 user / conversation scope 记忆
 - `tavily_search`：配置 `TAVILY_API_KEY` 后启用 Tavily 搜索
+- `terminal_open` / `terminal_exec`：`SANDBOX_ENABLED=true` 且 Docker 可用时启用，用于打开会话终端并执行命令
 
 生成接口的 `tool_mode` 支持 `auto` 和 `none`。`tool_mode=auto` 时，后端会向模型提供当前可用的内置工具和 MCP 工具；`tool_mode=none` 时，本次生成不提供工具。
 
@@ -256,6 +266,23 @@ MCP_SERVERS=[{"name":"github","transport":"stdio","command":"npx","args":["-y","
 - `env`：传给 stdio MCP 子进程的环境变量，格式为 `KEY=value`
 
 如果 `.env` 中需要把 `MCP_SERVERS` 写成多行 JSON，请用引号包住完整值。
+
+## 沙箱与工作区
+
+沙箱默认关闭。设置 `SANDBOX_ENABLED=true` 后，启动时会检查 Docker 是否可用；不可用则进程退出。默认镜像为 `tanhao2015/guchat-sandbox:bookworm-v1.1`，可用 `SANDBOX_IMAGE` 覆盖。
+
+每个会话有独立工作区目录（默认 `SANDBOX_DATA_ROOT/{user_id}/{conversation_id}/workspace`），容器内挂载为 `/workspace`。只有该目录会在多轮对话之间保留；容器内其它状态（安装的软件包、环境变量、后台进程）随容器销毁而丢失。
+
+模型需要先调用 `terminal_open` 再调用 `terminal_exec`。容器按 `SANDBOX_IDLE_TIMEOUT_SECONDS`（默认 `1800`）空闲回收。服务重启后，仍在运行的会话容器会重新纳入空闲回收；已经退出的容器会被删除。收养残留容器失败时，服务不会启动。
+
+会话文件接口：
+
+- `POST /api/conversations/:conversation_id/files`：上传
+- `GET /api/conversations/:conversation_id/files`：列出工作区根目录
+- `GET /api/conversations/:conversation_id/files/download`：下载
+- `DELETE /api/conversations/:conversation_id/files`：删除
+
+删除会话时会同时销毁对应终端容器并删除工作区目录。
 
 ## 记忆与 RAG 配置
 
@@ -380,6 +407,10 @@ GOOS=windows GOARCH=amd64 go build -o guchat.exe .
 ### 启动时报 `DATABASE_URL is required`
 
 请检查 `.env` 中的 `DATABASE_URL`，并确认数据库已创建、账号密码正确。
+
+### 启动时报 `docker is not available` 或 `permission denied` 访问 docker.sock
+
+仅在 `SANDBOX_ENABLED=true` 时出现。请确认 Docker 正在运行，并且启动 guchat 的用户属于 `docker` 组（修改组后需要重新登录）。也可暂时关闭沙箱：`SANDBOX_ENABLED=false`。
 
 ### 数据库时间字段解析异常
 

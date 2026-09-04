@@ -18,6 +18,7 @@ import (
 	"github.com/AlexMeiko/guchat/internal/memory/vector"
 	"github.com/AlexMeiko/guchat/internal/repository"
 	"github.com/AlexMeiko/guchat/internal/router"
+	"github.com/AlexMeiko/guchat/internal/sandbox"
 	"github.com/AlexMeiko/guchat/internal/service"
 	"github.com/AlexMeiko/guchat/internal/stream"
 	"github.com/AlexMeiko/guchat/internal/tool"
@@ -65,8 +66,58 @@ func main() {
 	authHandler := handler.NewAuthHandler(authService)
 
 	conversationRepo := repository.NewConversationRepository(mysqlDB)
-	conversationService := service.NewConversationService(conversationRepo)
+	workspaceManager, err := sandbox.NewWorkspaceManager(cfg.SandboxDataRoot, cfg.SandboxUploadMaxBytes)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var sandboxManager *sandbox.Manager
+	if cfg.SandboxEnabled {
+		dockerRunner := sandbox.NewDockerRunner(cfg.SandboxImage)
+
+		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := dockerRunner.Check(checkCtx); err != nil {
+			cancel()
+			log.Fatal(err)
+		}
+		cancel()
+
+		pullCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		if err := dockerRunner.EnsureImage(pullCtx); err != nil {
+			cancel()
+			log.Fatal(err)
+		}
+		cancel()
+
+		sandboxManager = sandbox.NewManager(
+			workspaceManager,
+			dockerRunner,
+			time.Duration(cfg.SandboxIdleTimeoutSeconds)*time.Second,
+		)
+
+		adoptCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := sandboxManager.AdoptExisting(adoptCtx); err != nil {
+			cancel()
+			log.Fatal(err)
+		}
+		cancel()
+
+		go func() {
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+
+			for range ticker.C {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				sandboxManager.CleanupExpired(cleanupCtx)
+				cancel()
+			}
+		}()
+	}
+
+	conversationService := service.NewConversationService(conversationRepo, workspaceManager, sandboxManager)
 	conversationHandler := handler.NewConversationHandler(conversationService)
+	workspaceService := service.NewWorkspaceService(conversationService, workspaceManager)
+	workspaceHandler := handler.NewWorkspaceHandler(workspaceService, cfg.SandboxUploadMaxBytes)
 
 	memoryStore := memory.NewMySQLStore(mysqlDB)
 	mysqlMemoryRetriever := memory.NewMySQLRetriever(memoryStore)
@@ -104,6 +155,10 @@ func main() {
 			TavilyBaseURL: cfg.TavilyBaseURL,
 			MemoryService: memoryService,
 		}),
+	}
+
+	if sandboxManager != nil {
+		toolProviders = append(toolProviders, tool.NewTerminalProvider(sandboxManager))
 	}
 
 	for _, server := range cfg.MCPServers {
@@ -160,7 +215,16 @@ func main() {
 
 	go generationService.RetryLoop(context.Background())
 
-	r := router.New(authHandler, conversationHandler, messageHandler, memoryHandler, modelHandler, generationHandler, jwtService)
+	r := router.New(
+		authHandler,
+		conversationHandler,
+		messageHandler,
+		memoryHandler,
+		modelHandler,
+		generationHandler,
+		workspaceHandler,
+		jwtService,
+	)
 	log.Printf("server starting on port %s", cfg.Port)
 
 	if err := r.Run(":" + cfg.Port); err != nil {

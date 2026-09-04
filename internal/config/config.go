@@ -12,16 +12,23 @@ import (
 )
 
 type Config struct {
-	Port                      string
-	DatabaseURL               string
-	JWTSecret                 string
-	JWTAccessTTL              int64
-	JWTRefreshTTL             int64
-	ContextTokenLimit         int
-	ContextCompressRatio      float64
-	GenerationMaxToolRounds   int
-	GenerationRetryInterval   int64
-	GenerationRetryMax        int64
+	Port                    string
+	DatabaseURL             string
+	JWTSecret               string
+	JWTAccessTTL            int64
+	JWTRefreshTTL           int64
+	ContextTokenLimit       int
+	ContextCompressRatio    float64
+	GenerationMaxToolRounds int
+	GenerationRetryInterval int64
+	GenerationRetryMax      int64
+
+	SandboxEnabled            bool
+	SandboxDataRoot           string
+	SandboxImage              string
+	SandboxIdleTimeoutSeconds int64
+	SandboxUploadMaxBytes     int64
+
 	TavilyAPIKey              string
 	TavilyBaseURL             string
 	EmbeddingProvider         string
@@ -84,16 +91,23 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		Port:                      getEnv("PORT", "8080"),
-		DatabaseURL:               databaseURL,
-		JWTSecret:                 jwtSecret,
-		JWTAccessTTL:              getEnvInt64("JWT_ACCESS_TTL_SECONDS", 3600),
-		JWTRefreshTTL:             getEnvInt64("JWT_REFRESH_TTL_SECONDS", 2592000),
-		ContextTokenLimit:         int(max(getEnvInt64("CONTEXT_TOKEN_LIMIT", 32000), 1)),
-		ContextCompressRatio:      contextCompressRatio,
-		GenerationMaxToolRounds:   max(int(getEnvInt64("GENERATION_MAX_TOOL_ROUNDS", 12)), 1),
-		GenerationRetryInterval:   max(getEnvInt64("GENERATION_RETRY_INTERVAL_SECONDS", 30), 1),
-		GenerationRetryMax:        max(getEnvInt64("GENERATION_RETRY_MAX", 5), 1),
+		Port:                    getEnv("PORT", "8080"),
+		DatabaseURL:             databaseURL,
+		JWTSecret:               jwtSecret,
+		JWTAccessTTL:            getEnvInt64("JWT_ACCESS_TTL_SECONDS", 3600),
+		JWTRefreshTTL:           getEnvInt64("JWT_REFRESH_TTL_SECONDS", 2592000),
+		ContextTokenLimit:       int(max(getEnvInt64("CONTEXT_TOKEN_LIMIT", 32000), 1)),
+		ContextCompressRatio:    contextCompressRatio,
+		GenerationMaxToolRounds: max(int(getEnvInt64("GENERATION_MAX_TOOL_ROUNDS", 12)), 1),
+		GenerationRetryInterval: max(getEnvInt64("GENERATION_RETRY_INTERVAL_SECONDS", 30), 1),
+		GenerationRetryMax:      max(getEnvInt64("GENERATION_RETRY_MAX", 5), 1),
+
+		SandboxEnabled:            getEnvBool("SANDBOX_ENABLED", false),
+		SandboxDataRoot:           strings.TrimSpace(getEnv("SANDBOX_DATA_ROOT", "./data/sandbox")),
+		SandboxImage:              strings.TrimSpace(getEnv("SANDBOX_IMAGE", "tanhao2015/guchat-sandbox:bookworm-v1.1")),
+		SandboxIdleTimeoutSeconds: max(getEnvInt64("SANDBOX_IDLE_TIMEOUT_SECONDS", 1800), 1),
+		SandboxUploadMaxBytes:     max(getEnvInt64("SANDBOX_UPLOAD_MAX_BYTES", 100<<20), 1),
+
 		TavilyAPIKey:              strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
 		TavilyBaseURL:             strings.TrimRight(strings.TrimSpace(getEnv("TAVILY_BASE_URL", defaultTavilyBaseURL)), "/"),
 		EmbeddingProvider:         strings.TrimSpace(os.Getenv("EMBEDDING_PROVIDER")),
@@ -133,6 +147,22 @@ func getEnv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	switch strings.ToLower(value) {
+	case "1", "true":
+		return true
+	case "0", "false":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func getEnvInt64(key string, fallback int64) int64 {

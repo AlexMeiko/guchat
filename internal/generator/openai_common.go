@@ -1,9 +1,11 @@
 package generator
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 
@@ -12,7 +14,26 @@ import (
 
 var errOpenAIStreamDone = errors.New("stream done")
 
+const maxSSELineBytes = 4 << 20
+
 var toolCallTagRe = regexp.MustCompile(`<!--tool_call:([^>]+)-->`)
+
+func forEachSSELine(r io.Reader, fn func(line string) error) error {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxSSELineBytes)
+	for scanner.Scan() {
+		if err := fn(strings.TrimRight(scanner.Text(), "\r")); err != nil {
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return fmt.Errorf("sse line exceeds %d bytes", maxSSELineBytes)
+		}
+		return err
+	}
+	return nil
+}
 
 func marshalOpenAIRequestBody(base any, extraBody string, reservedKeys ...string) ([]byte, error) {
 	basePayload, err := json.Marshal(base)

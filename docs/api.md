@@ -147,6 +147,10 @@ Authorization: Bearer <access_token>
 | 会话 | GET | `/api/conversations/:conversation_id` | Yes | user/admin |
 | 会话 | PATCH | `/api/conversations/:conversation_id` | Yes | user/admin |
 | 会话 | DELETE | `/api/conversations/:conversation_id` | Yes | user/admin |
+| 工作区 | POST | `/api/conversations/:conversation_id/files` | Yes | user/admin |
+| 工作区 | GET | `/api/conversations/:conversation_id/files` | Yes | user/admin |
+| 工作区 | GET | `/api/conversations/:conversation_id/files/download` | Yes | user/admin |
+| 工作区 | DELETE | `/api/conversations/:conversation_id/files` | Yes | user/admin |
 | 消息 | GET | `/api/conversations/:conversation_id/messages` | Yes | user/admin |
 | 消息 | POST | `/api/conversations/:conversation_id/messages` | Yes | user/admin |
 | 消息 | GET | `/api/conversations/:conversation_id/messages/:message_id` | Yes | user/admin |
@@ -406,6 +410,10 @@ Authorization: Bearer <access_token>
 
 #### `DELETE /api/conversations/:conversation_id`
 
+说明：
+
+- 删除会话时会销毁该会话的终端容器，并删除对应工作区目录
+
 成功响应：`204 No Content`
 
 常见失败：
@@ -609,7 +617,7 @@ Authorization: Bearer <access_token>
 - 路径中的 `:message_id` 是源消息 ID
 - 成功后会新建一条 assistant 消息，并异步开始生成
 - `tool_mode` 为可选字段，支持 `auto`、`none`；不传时默认为 `auto`
-- `tool_mode=auto` 时，生成器可使用内置工具和已配置的 MCP 工具
+- `tool_mode=auto` 时，生成器可使用内置工具和已配置的 MCP 工具；若已启用沙箱，还包括 `terminal_open` / `terminal_exec`
 - `tool_mode=none` 时，本次生成不向模型提供工具
 - 生成前会以 system 消息形式默认注入少量 active、未过期、scope=user 的基础记忆，分类限制为 `constraint`、`negative_preference`、`user_profile`、`preference`
 - 其他历史记忆、事实、总结和知识不会默认注入；`tool_mode=auto` 时模型可通过 `search_memory` 按需检索
@@ -1030,6 +1038,108 @@ Authorization: Bearer <access_token>
 
 ---
 
+### 5.8 工作区
+
+工作区文件落在当前会话目录，不入库。路径参数 `:conversation_id` 必须属于当前用户。列表、上传、下载、删除都只针对工作区根目录中的单层文件名，不接受路径分隔符。
+
+#### `GET /api/conversations/:conversation_id/files`
+
+列出当前会话工作区根目录。
+
+成功响应：`200 OK`
+
+```json
+{
+  "items": [
+    {
+      "name": "notes.txt",
+      "path": "/workspace/notes.txt",
+      "size_bytes": 12,
+      "is_dir": false,
+      "mod_time": "2026-09-03T02:00:00+08:00"
+    }
+  ]
+}
+```
+
+`path` 是容器内路径，固定为 `/workspace/{name}`。
+
+常见失败：
+
+- `400 invalid conversation id`
+- `404 conversation not found`
+- `500 internal server error`
+
+#### `POST /api/conversations/:conversation_id/files`
+
+`Content-Type: multipart/form-data`
+
+字段：
+
+- `file`：必填，上传文件
+- `overwrite`：可选，字符串 `true` 时覆盖已存在的普通文件
+
+成功响应：`201 Created`
+
+```json
+{
+  "name": "notes.txt",
+  "path": "/workspace/notes.txt",
+  "size_bytes": 12,
+  "is_dir": false,
+  "mod_time": "2026-09-03T02:00:00+08:00"
+}
+```
+
+常见失败：
+
+- `400 invalid conversation id`
+- `400 file is required`
+- `400 invalid file name`
+- `400 cannot overwrite non-regular file`
+- `404 conversation not found`
+- `409 file already exists`
+- `413 file too large`
+- `500 internal server error`
+
+#### `GET /api/conversations/:conversation_id/files/download`
+
+查询参数：
+
+- `name`：必填，工作区根目录中的文件名
+
+成功响应：`200 OK`，响应体为文件内容；`Content-Disposition` 为 attachment。
+
+常见失败：
+
+- `400 invalid conversation id`
+- `400 file name is required`
+- `400 invalid file name`
+- `400 cannot download directory`
+- `400 cannot download non-regular file`
+- `404 conversation not found`
+- `404 file not found`
+- `500 internal server error`
+
+#### `DELETE /api/conversations/:conversation_id/files`
+
+查询参数：
+
+- `name`：必填，工作区根目录中的文件名
+
+成功响应：`204 No Content`
+
+常见失败：
+
+- `400 invalid conversation id`
+- `400 file name is required`
+- `400 invalid file name`
+- `404 conversation not found`
+- `404 file not found`
+- `500 internal server error`
+
+---
+
 ## 6. SSE 事件格式
 
 接口：
@@ -1206,6 +1316,8 @@ data: <json>
 - 删除后，如果已有 SSE 连接仍处于极小的并发窗口，当前实现下它仍可能观察到 terminal 事件；业务状态应以数据库查询结果为准
 - 在极小的时序窗口里，`message.completed` 可能略早于数据库最终 `done` 状态可见
 - stdio MCP 工具调用开始后，当前实现会等待该工具调用返回
+- 启用沙箱时，终端容器按 `SANDBOX_IDLE_TIMEOUT_SECONDS` 空闲回收；服务重启后仍在运行的会话容器会重新纳入回收，已经退出的容器会被删除
+- `terminal_exec` 在容器未打开或已被回收时返回 `terminal_not_open`，工作区 `/workspace` 中的文件仍然可用
 
 ---
 
@@ -1223,6 +1335,8 @@ data: <json>
 | `add_memory` | MemoryService 已配置 | 写入 active 的 user / conversation scope 记忆 |
 | `disable_memory` | MemoryService 已配置 | 禁用当前用户自己的 user / conversation scope 记忆 |
 | `tavily_search` | 配置 `TAVILY_API_KEY` | 使用 Tavily 搜索互联网信息 |
+| `terminal_open` | `SANDBOX_ENABLED=true` 且 Docker 可用 | 打开或重新打开当前会话的临时终端容器 |
+| `terminal_exec` | `SANDBOX_ENABLED=true` 且 Docker 可用 | 在已打开的终端容器中执行一条 shell 命令 |
 
 生成前会默认向模型提供少量基础记忆，但不会默认注入全部记忆或知识。默认注入只包含 active、未过期、scope=user 的 `constraint`、`negative_preference`、`user_profile`、`preference` 条目。需要更多历史记忆、事实、总结或知识时，模型应通过 `search_memory` 检索。
 
@@ -1293,6 +1407,74 @@ data: <json>
 - 后端固定向 Tavily 发送 `search_depth=advanced` 和 `max_results=10`。
 - `TAVILY_BASE_URL` 未配置时使用 `https://api.tavily.com`。
 - 工具结果是 Tavily 返回的原始 JSON。
+
+#### `terminal_open`
+
+请求参数由模型生成，当前无字段。
+
+```json
+{}
+```
+
+说明：
+
+- 仅在 `SANDBOX_ENABLED=true` 且启动时 Docker 检查通过后暴露给模型。
+- 每个会话对应一个临时容器，工作区挂载为 `/workspace`。
+- 只有 `/workspace` 会在容器销毁后保留；容器内其它状态不保留。
+- 若打开结果包含 `description`，模型应优先遵循其中的环境说明。
+
+成功结果示例：
+
+```json
+{
+  "ok": true,
+  "description": "沙箱环境说明（镜像内存在该文件时才返回）"
+}
+```
+
+`description` 为可选字段。
+
+#### `terminal_exec`
+
+请求参数由模型生成。
+
+```json
+{
+  "command": "ls -la /workspace",
+  "timeout_seconds": 30
+}
+```
+
+说明：
+
+- `command` 必填。
+- `timeout_seconds` 未传或小于等于 `0` 时默认 `30` 秒。
+- 每次调用都是新的 shell；进入子目录需写在命令里，例如 `cd project && npm test`。
+- 需要保留或供用户下载的文件必须写到 `/workspace`。
+
+成功结果示例：
+
+```json
+{
+  "ok": true,
+  "exit_code": 0,
+  "stdout": "notes.txt\n",
+  "stderr": "",
+  "duration_ms": 12,
+  "timed_out": false,
+  "truncated": false
+}
+```
+
+容器未打开或已过期时：
+
+```json
+{
+  "ok": false,
+  "error_code": "terminal_not_open",
+  "message": "Terminal is not open or has expired. Call terminal_open before executing commands. Files in /workspace are still available."
+}
+```
 
 #### `search_memory`
 
@@ -1476,7 +1658,21 @@ RAG_SPLITTER_API_HEADERS_JSON={}
 - `RAG_SPLITTER_PROVIDER` 当前只支持 `external_api`。
 - 启用 RAG 后，服务启动时会创建 Qdrant collection，并创建 `memory_item_id`、`owner_user_id`、`scope`、`conversation_id`、`status`、`category` payload index。
 
-### 9.5 MCP
+### 9.5 Sandbox
+
+沙箱默认关闭。`SANDBOX_ENABLED=true` 时，启动会检查 Docker；不可用则进程退出。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `SANDBOX_ENABLED` | `false` | 是否启用 Docker 终端沙箱和 `terminal_*` 工具 |
+| `SANDBOX_DATA_ROOT` | `./data/sandbox` | 会话工作区根目录 |
+| `SANDBOX_IMAGE` | `tanhao2015/guchat-sandbox:bookworm-v1.1` | 终端容器镜像 |
+| `SANDBOX_IDLE_TIMEOUT_SECONDS` | `1800` | 空闲回收时间，最小为 `1` |
+| `SANDBOX_UPLOAD_MAX_BYTES` | `104857600` | 工作区单文件上传上限，最小为 `1` |
+
+工作区路径为 `{SANDBOX_DATA_ROOT}/{user_id}/{conversation_id}/workspace`，容器内挂载为 `/workspace`。
+
+### 9.6 MCP
 
 `MCP_SERVERS` 是 JSON 数组字符串。每个 server 必须有唯一 `name`，并支持 `transport=http` 或 `transport=stdio`。
 
