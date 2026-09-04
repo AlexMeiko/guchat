@@ -1099,6 +1099,7 @@ Authorization: Bearer <access_token>
 - `400 cannot overwrite non-regular file`
 - `404 conversation not found`
 - `409 file already exists`
+- `413 file too large`
 - `500 internal server error`
 
 #### `GET /api/conversations/:conversation_id/files/download`
@@ -1667,6 +1668,7 @@ RAG_SPLITTER_API_HEADERS_JSON={}
 | `SANDBOX_DATA_ROOT` | `./data/sandbox` | 会话工作区根目录 |
 | `SANDBOX_IMAGE` | `tanhao2015/guchat-sandbox:bookworm-v1.1` | 终端容器镜像 |
 | `SANDBOX_IDLE_TIMEOUT_SECONDS` | `1800` | 空闲回收时间，最小为 `1` |
+| `SANDBOX_UPLOAD_MAX_BYTES` | `104857600` | 工作区单文件上传上限，最小为 `1` |
 
 工作区路径为 `{SANDBOX_DATA_ROOT}/{user_id}/{conversation_id}/workspace`，容器内挂载为 `/workspace`。
 

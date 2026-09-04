@@ -15,6 +15,7 @@ import (
 
 var ErrInvalidFileName = errors.New("invalid file name")
 var ErrFileExists = errors.New("file already exists")
+var ErrFileTooLarge = errors.New("file too large")
 var ErrWorkspaceFileNotFound = errors.New("workspace file not found")
 var ErrWorkspaceItemIsDir = errors.New("workspace item is directory")
 var ErrWorkspaceItemNotRegular = errors.New("workspace item is not regular file")
@@ -28,10 +29,11 @@ type WorkspaceFile struct {
 }
 
 type WorkspaceManager struct {
-	dataRoot string
+	dataRoot       string
+	maxUploadBytes int64
 }
 
-func NewWorkspaceManager(dataRoot string) (*WorkspaceManager, error) {
+func NewWorkspaceManager(dataRoot string, maxUploadBytes int64) (*WorkspaceManager, error) {
 	dataRoot = strings.TrimSpace(dataRoot)
 	if dataRoot == "" {
 		return nil, fmt.Errorf("sandbox data root is required")
@@ -42,7 +44,7 @@ func NewWorkspaceManager(dataRoot string) (*WorkspaceManager, error) {
 		return nil, err
 	}
 
-	return &WorkspaceManager{dataRoot: absRoot}, nil
+	return &WorkspaceManager{dataRoot: absRoot, maxUploadBytes: maxUploadBytes}, nil
 }
 
 func (m *WorkspaceManager) WorkspacePath(userID int64, conversationID string) string {
@@ -132,8 +134,14 @@ func (m *WorkspaceManager) SaveFile(
 	}
 	defer file.Close()
 
-	if _, err := io.Copy(file, reader); err != nil {
+	written, err := io.Copy(file, io.LimitReader(reader, m.maxUploadBytes+1))
+	if err != nil {
 		return nil, err
+	}
+	if written > m.maxUploadBytes {
+		_ = file.Close()
+		_ = os.Remove(targetPath)
+		return nil, ErrFileTooLarge
 	}
 
 	info, err := file.Stat()

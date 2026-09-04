@@ -66,7 +66,7 @@ func main() {
 	authHandler := handler.NewAuthHandler(authService)
 
 	conversationRepo := repository.NewConversationRepository(mysqlDB)
-	workspaceManager, err := sandbox.NewWorkspaceManager(cfg.SandboxDataRoot)
+	workspaceManager, err := sandbox.NewWorkspaceManager(cfg.SandboxDataRoot, cfg.SandboxUploadMaxBytes)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func main() {
 	conversationService := service.NewConversationService(conversationRepo, workspaceManager, sandboxManager)
 	conversationHandler := handler.NewConversationHandler(conversationService)
 	workspaceService := service.NewWorkspaceService(conversationService, workspaceManager)
-	workspaceHandler := handler.NewWorkspaceHandler(workspaceService)
+	workspaceHandler := handler.NewWorkspaceHandler(workspaceService, cfg.SandboxUploadMaxBytes)
 
 	memoryStore := memory.NewMySQLStore(mysqlDB)
 	mysqlMemoryRetriever := memory.NewMySQLRetriever(memoryStore)

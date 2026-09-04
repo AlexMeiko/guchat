@@ -27,6 +27,7 @@ type Config struct {
 	SandboxDataRoot           string
 	SandboxImage              string
 	SandboxIdleTimeoutSeconds int64
+	SandboxUploadMaxBytes     int64
 
 	TavilyAPIKey              string
 	TavilyBaseURL             string
@@ -105,6 +106,7 @@ func Load() (Config, error) {
 		SandboxDataRoot:           strings.TrimSpace(getEnv("SANDBOX_DATA_ROOT", "./data/sandbox")),
 		SandboxImage:              strings.TrimSpace(getEnv("SANDBOX_IMAGE", "tanhao2015/guchat-sandbox:bookworm-v1.1")),
 		SandboxIdleTimeoutSeconds: max(getEnvInt64("SANDBOX_IDLE_TIMEOUT_SECONDS", 1800), 1),
+		SandboxUploadMaxBytes:     max(getEnvInt64("SANDBOX_UPLOAD_MAX_BYTES", 100<<20), 1),
 
 		TavilyAPIKey:              strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
 		TavilyBaseURL:             strings.TrimRight(strings.TrimSpace(getEnv("TAVILY_BASE_URL", defaultTavilyBaseURL)), "/"),

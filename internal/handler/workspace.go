@@ -14,11 +14,13 @@ import (
 
 type WorkspaceHandler struct {
 	workspaceService *service.WorkspaceService
+	maxUploadBytes   int64
 }
 
-func NewWorkspaceHandler(workspaceService *service.WorkspaceService) *WorkspaceHandler {
+func NewWorkspaceHandler(workspaceService *service.WorkspaceService, maxUploadBytes int64) *WorkspaceHandler {
 	return &WorkspaceHandler{
 		workspaceService: workspaceService,
+		maxUploadBytes:   maxUploadBytes,
 	}
 }
 
@@ -65,9 +67,21 @@ func (h *WorkspaceHandler) Upload(c *gin.Context) {
 		return
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, h.maxUploadBytes+(1<<20))
+
 	formFile, err := c.FormFile("file")
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			c.JSON(http.StatusRequestEntityTooLarge, model.ErrorResponse{Error: "file too large"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "file is required"})
+		return
+	}
+
+	if formFile.Size > h.maxUploadBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, model.ErrorResponse{Error: "file too large"})
 		return
 	}
 
@@ -94,6 +108,8 @@ func (h *WorkspaceHandler) Upload(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid file name"})
 		case errors.Is(err, sandbox.ErrFileExists):
 			c.JSON(http.StatusConflict, model.ErrorResponse{Error: "file already exists"})
+		case errors.Is(err, sandbox.ErrFileTooLarge):
+			c.JSON(http.StatusRequestEntityTooLarge, model.ErrorResponse{Error: "file too large"})
 		case errors.Is(err, sandbox.ErrWorkspaceItemNotRegular):
 			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "cannot overwrite non-regular file"})
 		default:
