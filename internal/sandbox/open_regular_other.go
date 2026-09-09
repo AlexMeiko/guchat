@@ -41,3 +41,14 @@ func openRegularForWriteNoFollow(path string, perm os.FileMode) (*os.File, error
 
 	return os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, perm)
 }
+
+func createExclusiveNoFollow(path string, perm os.FileMode) (*os.File, error) {
+	info, err := os.Lstat(path)
+	if err == nil {
+		return nil, os.ErrExist
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+}

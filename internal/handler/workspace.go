@@ -4,6 +4,7 @@ import (
 	"errors"
 	"mime"
 	"net/http"
+	"strings"
 
 	"github.com/AlexMeiko/guchat/internal/model"
 	"github.com/AlexMeiko/guchat/internal/sandbox"
@@ -128,9 +129,8 @@ func (h *WorkspaceHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	name := c.Query("name")
-	if name == "" {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "file name is required"})
+	rawPath, ok := workspaceQueryPath(c)
+	if !ok {
 		return
 	}
 
@@ -139,7 +139,7 @@ func (h *WorkspaceHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	err := h.workspaceService.DeleteItem(c.Request.Context(), user.UserID, conversationID, name)
+	err := h.workspaceService.DeleteItem(c.Request.Context(), user.UserID, conversationID, rawPath)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrConversationNotFound):
@@ -148,6 +148,8 @@ func (h *WorkspaceHandler) Delete(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid file name"})
 		case errors.Is(err, sandbox.ErrWorkspaceFileNotFound):
 			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "file not found"})
+		case errors.Is(err, sandbox.ErrWorkspaceItemNotRegular):
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "cannot delete non-regular path"})
 		default:
 			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: "internal server error"})
 		}
@@ -164,9 +166,8 @@ func (h *WorkspaceHandler) Download(c *gin.Context) {
 		return
 	}
 
-	name := c.Query("name")
-	if name == "" {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "file name is required"})
+	rawPath, ok := workspaceQueryPath(c)
+	if !ok {
 		return
 	}
 
@@ -175,7 +176,7 @@ func (h *WorkspaceHandler) Download(c *gin.Context) {
 		return
 	}
 
-	result, err := h.workspaceService.ResolveFile(c.Request.Context(), user.UserID, conversationID, name)
+	result, err := h.workspaceService.ResolveFile(c.Request.Context(), user.UserID, conversationID, rawPath)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrConversationNotFound):
@@ -207,6 +208,15 @@ func (h *WorkspaceHandler) Download(c *gin.Context) {
 		result.Info.ModTime,
 		result.File,
 	)
+}
+
+func workspaceQueryPath(c *gin.Context) (string, bool) {
+	raw := strings.TrimSpace(c.Query("path"))
+	if raw == "" {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "file path is required"})
+		return "", false
+	}
+	return raw, true
 }
 
 func newWorkspaceFileResponse(file sandbox.WorkspaceFile) model.WorkspaceFileResponse {

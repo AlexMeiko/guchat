@@ -1045,7 +1045,7 @@ Authorization: Bearer <access_token>
 
 ### 5.8 工作区
 
-工作区文件落在当前会话目录，不入库。路径参数 `:conversation_id` 必须属于当前用户。列表、上传、下载、删除都只针对工作区根目录中的单层文件名，不接受路径分隔符。
+工作区文件落在当前会话目录，不入库。路径参数 `:conversation_id` 必须属于当前用户。列表和上传仍只针对工作区根目录中的单层文件名；下载和删除接受容器内路径 `/workspace/...`，可含子目录。
 
 #### `GET /api/conversations/:conversation_id/files`
 
@@ -1111,14 +1111,14 @@ Authorization: Bearer <access_token>
 
 查询参数：
 
-- `name`：必填，工作区根目录中的文件名
+- `path`：必填，工作区路径，如 `/workspace/foo/bar.png`
 
 成功响应：`200 OK`，响应体为文件内容；`Content-Disposition` 为 attachment。
 
 常见失败：
 
 - `400 invalid conversation id`
-- `400 file name is required`
+- `400 file path is required`
 - `400 invalid file name`
 - `400 cannot download directory`
 - `400 cannot download non-regular file`
@@ -1130,15 +1130,16 @@ Authorization: Bearer <access_token>
 
 查询参数：
 
-- `name`：必填，工作区根目录中的文件名
+- `path`：必填，工作区路径，如 `/workspace/foo/bar.png`
 
 成功响应：`204 No Content`
 
 常见失败：
 
 - `400 invalid conversation id`
-- `400 file name is required`
+- `400 file path is required`
 - `400 invalid file name`
+- `400 cannot delete non-regular path`
 - `404 conversation not found`
 - `404 file not found`
 - `500 internal server error`
