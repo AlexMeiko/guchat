@@ -12,23 +12,25 @@ import (
 var ErrModelNotFound = errors.New("model not found")
 
 type CreateModelInput struct {
-	Name      string
-	Provider  string
-	ModelKey  string
-	BaseURL   string
-	APIKey    string
-	ExtraBody string
-	IsEnabled bool
+	Name           string
+	Provider       string
+	ModelKey       string
+	BaseURL        string
+	APIKey         string
+	ExtraBody      string
+	IsEnabled      bool
+	SupportsVision bool
 }
 
 type UpdateModelInput struct {
-	Name      *string
-	Provider  *string
-	ModelKey  *string
-	BaseURL   *string
-	APIKey    *string
-	ExtraBody *string
-	IsEnabled *bool
+	Name           *string
+	Provider       *string
+	ModelKey       *string
+	BaseURL        *string
+	APIKey         *string
+	ExtraBody      *string
+	IsEnabled      *bool
+	SupportsVision *bool
 }
 
 type ModelService struct {
@@ -51,13 +53,14 @@ func (s *ModelService) ListAll(ctx context.Context) ([]entity.ModelConfig, error
 
 func (s *ModelService) Create(ctx context.Context, input CreateModelInput) (*entity.ModelConfig, error) {
 	model := &entity.ModelConfig{
-		Name:      input.Name,
-		Provider:  input.Provider,
-		ModelKey:  input.ModelKey,
-		BaseURL:   input.BaseURL,
-		APIKey:    input.APIKey,
-		ExtraBody: input.ExtraBody,
-		IsEnabled: input.IsEnabled,
+		Name:           input.Name,
+		Provider:       input.Provider,
+		ModelKey:       input.ModelKey,
+		BaseURL:        input.BaseURL,
+		APIKey:         input.APIKey,
+		ExtraBody:      input.ExtraBody,
+		IsEnabled:      input.IsEnabled,
+		SupportsVision: input.SupportsVision,
 	}
 
 	if err := s.modelRepo.Create(ctx, model); err != nil {
@@ -114,6 +117,9 @@ func (s *ModelService) UpdateByID(ctx context.Context, id int64, input UpdateMod
 	}
 	if input.IsEnabled != nil {
 		model.IsEnabled = *input.IsEnabled
+	}
+	if input.SupportsVision != nil {
+		model.SupportsVision = *input.SupportsVision
 	}
 
 	updated, err := s.modelRepo.UpdateByID(ctx, model)

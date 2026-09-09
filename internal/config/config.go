@@ -29,6 +29,10 @@ type Config struct {
 	SandboxIdleTimeoutSeconds int64
 	SandboxUploadMaxBytes     int64
 
+	VisionFallbackModelID int64
+	ReadImageMaxBytes     int64
+	ReadImageMaxEdge      int
+
 	TavilyAPIKey              string
 	TavilyBaseURL             string
 	EmbeddingProvider         string
@@ -107,6 +111,10 @@ func Load() (Config, error) {
 		SandboxImage:              strings.TrimSpace(getEnv("SANDBOX_IMAGE", "tanhao2015/guchat-sandbox:bookworm-v1.1")),
 		SandboxIdleTimeoutSeconds: max(getEnvInt64("SANDBOX_IDLE_TIMEOUT_SECONDS", 1800), 1),
 		SandboxUploadMaxBytes:     max(getEnvInt64("SANDBOX_UPLOAD_MAX_BYTES", 100<<20), 1),
+
+		VisionFallbackModelID: max(getEnvInt64("VISION_FALLBACK_MODEL_ID", 0), 0),
+		ReadImageMaxBytes:     max(getEnvInt64("READ_IMAGE_MAX_BYTES", 10<<20), 1),
+		ReadImageMaxEdge:      max(int(getEnvInt64("READ_IMAGE_MAX_EDGE", 2000)), 1),
 
 		TavilyAPIKey:              strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
 		TavilyBaseURL:             strings.TrimRight(strings.TrimSpace(getEnv("TAVILY_BASE_URL", defaultTavilyBaseURL)), "/"),
