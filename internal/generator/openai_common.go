@@ -2,6 +2,7 @@ package generator
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,6 +79,25 @@ func sliceByOffset(content string, start, end int) string {
 	end = min(end, len(content))
 
 	return strings.TrimSpace(content[start:end])
+}
+
+// omitEmptyString 空串返回 nil，让 any 字段重新走 json omitempty 的省略语义
+func omitEmptyString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func generateImageDataURL(image *service.GenerateImage) string {
+	if image == nil || len(image.Bytes) == 0 {
+		return ""
+	}
+	mimeType := strings.TrimSpace(image.MIMEType)
+	if mimeType == "" {
+		mimeType = "image/jpeg"
+	}
+	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(image.Bytes)
 }
 
 func groupToolExchangesByRound(exchanges []service.ToolExchange) map[int][]service.ToolExchange {

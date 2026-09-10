@@ -9,6 +9,11 @@ import (
 
 var ErrUnsupportedModelProvider = errors.New("unsupported model provider")
 
+type GenerateImage struct {
+	MIMEType string
+	Bytes    []byte
+}
+
 type GenerateMessage struct {
 	ID               string
 	Role             string

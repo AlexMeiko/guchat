@@ -25,7 +25,13 @@ type openAIResponsesMessage struct {
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
-	Output    string `json:"output,omitempty"`
+	Output    any    `json:"output,omitempty"`
+}
+
+type openAIResponsesOutputPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
 }
 
 type openAIResponsesTool struct {
@@ -311,11 +317,7 @@ func appendOpenAIResponsesAssistantMessageWithRounds(
 				Name:      ex.Call.Name,
 				Arguments: string(ex.Call.Arguments),
 			})
-			result = append(result, openAIResponsesMessage{
-				Type:   "function_call_output",
-				CallID: ex.Call.ID,
-				Output: string(ex.Result.Result),
-			})
+			result = append(result, newOpenAIResponsesFunctionOutput(ex))
 		}
 	}
 
@@ -341,14 +343,28 @@ func appendOpenAIResponsesAssistantMessageWithLegacyTools(
 			Name:      ex.Call.Name,
 			Arguments: string(ex.Call.Arguments),
 		})
-		result = append(result, openAIResponsesMessage{
-			Type:   "function_call_output",
-			CallID: ex.Call.ID,
-			Output: string(ex.Result.Result),
-		})
+		result = append(result, newOpenAIResponsesFunctionOutput(ex))
 	}
 
 	return result
+}
+
+func newOpenAIResponsesFunctionOutput(ex service.ToolExchange) openAIResponsesMessage {
+	text := string(ex.Result.Result)
+	msg := openAIResponsesMessage{
+		Type:   "function_call_output",
+		CallID: ex.Call.ID,
+		Output: text,
+	}
+	dataURL := generateImageDataURL(ex.Result.Image)
+	if dataURL == "" {
+		return msg
+	}
+	msg.Output = []openAIResponsesOutputPart{
+		{Type: "input_text", Text: text},
+		{Type: "input_image", ImageURL: dataURL},
+	}
+	return msg
 }
 
 // takeOpenAIResponsesExtraTools 取出ExtraBody中的Tools,并移除相应字段

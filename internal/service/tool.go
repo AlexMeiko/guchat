@@ -12,6 +12,7 @@ type UserContext struct {
 	UserID         int64
 	ConversationID string
 	Role           string
+	SupportsVision bool
 }
 
 type ToolCall struct {
@@ -30,6 +31,7 @@ type ToolResult struct {
 	ToolCallID string          `json:"tool_call_id"`
 	Name       string          `json:"name"`
 	Result     json.RawMessage `json:"result"`
+	Image      *GenerateImage  `json:"-"`
 }
 
 type ToolExchange struct {
