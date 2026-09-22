@@ -19,7 +19,7 @@ type OpenAIResponsesGenerator struct {
 
 type openAIResponsesMessage struct {
 	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Content any    `json:"content,omitempty"`
 
 	Type      string `json:"type,omitempty"`
 	CallID    string `json:"call_id,omitempty"`
@@ -277,12 +277,21 @@ func buildOpenAIInputMessages(messages []service.GenerateMessage) []openAIRespon
 			content = strings.TrimSpace(toolCallTagRe.ReplaceAllString(content, ""))
 		}
 
-		if content != "" {
-			result = append(result, openAIResponsesMessage{
-				Role:    message.Role,
-				Content: content,
-			})
+		dataURL := generateImageDataURL(message.Image)
+		if content == "" && dataURL == "" {
+			continue
 		}
+
+		item := openAIResponsesMessage{Role: message.Role, Content: content}
+		if dataURL != "" {
+			parts := make([]openAIResponsesOutputPart, 0, 2)
+			if content != "" {
+				parts = append(parts, openAIResponsesOutputPart{Type: "input_text", Text: content})
+			}
+			parts = append(parts, openAIResponsesOutputPart{Type: "input_image", ImageURL: dataURL})
+			item.Content = parts
+		}
+		result = append(result, item)
 	}
 
 	return result

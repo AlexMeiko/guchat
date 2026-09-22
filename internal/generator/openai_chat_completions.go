@@ -244,16 +244,23 @@ func buildOpenAIChatCompletionMessages(
 		if message.Role == entity.MessageRoleAssistant {
 			content = strings.TrimSpace(toolCallTagRe.ReplaceAllString(content, ""))
 		}
-		if content == "" {
+
+		dataURL := generateImageDataURL(message.Image)
+		if content == "" && dataURL == "" {
 			continue
 		}
 
-		item := openAIChatCompletionMessage{
-			Role:    message.Role,
-			Content: content,
-		}
+		item := openAIChatCompletionMessage{Role: message.Role, Content: content}
 		if message.Role == entity.MessageRoleAssistant {
 			item.ReasoningContent = strings.TrimSpace(message.ReasoningContent)
+		}
+		if dataURL != "" {
+			parts := make([]openAIChatToolContent, 0, 2)
+			if content != "" {
+				parts = append(parts, openAIChatToolContent{Type: "text", Text: content})
+			}
+			parts = append(parts, openAIChatToolContent{Type: "image_url", ImageURL: &openAIChatImageURL{URL: dataURL}})
+			item.Content = parts
 		}
 		result = append(result, item)
 	}

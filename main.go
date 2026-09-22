@@ -210,6 +210,7 @@ func main() {
 		cfg.ContextTokenLimit,
 		cfg.ContextCompressRatio,
 		cfg.GenerationMaxToolRounds,
+		cfg.VisionFallbackModelID,
 		time.Duration(cfg.GenerationRetryInterval)*time.Second,
 		int(cfg.GenerationRetryMax),
 	)

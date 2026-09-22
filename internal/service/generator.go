@@ -19,6 +19,7 @@ type GenerateMessage struct {
 	Role             string
 	Content          string
 	ReasoningContent string
+	Image            *GenerateImage // 仅视觉 fallback 描述图片时使用；Content 为空也会发送
 	ToolExchanges    []ToolExchange
 	GenerationRounds []GenerationRound
 }

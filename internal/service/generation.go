@@ -55,6 +55,7 @@ type GenerationService struct {
 	contextTokenLimit    int
 	contextCompressRatio float64
 	maxToolRounds        int
+	visionAnalyzer       AnalyzeImageFunc
 	retryInterval        time.Duration
 	retryMax             int
 
@@ -80,6 +81,7 @@ func NewGenerationService(
 	contextTokenLimit int,
 	contextCompressRatio float64,
 	maxToolRounds int,
+	visionFallbackModelID int64,
 	retryInterval time.Duration,
 	retryMax int,
 ) *GenerationService {
@@ -96,6 +98,7 @@ func NewGenerationService(
 		contextTokenLimit:    contextTokenLimit,
 		contextCompressRatio: contextCompressRatio,
 		maxToolRounds:        maxToolRounds,
+		visionAnalyzer:       newVisionAnalyzer(modelService, generatorFactory, visionFallbackModelID),
 		retryInterval:        retryInterval,
 		retryMax:             retryMax,
 		retryItems:           make(map[string]*generationRetryItem),
@@ -238,6 +241,7 @@ func (s *GenerationService) Process(
 		UserID:         userID,
 		ConversationID: conversationID,
 		SupportsVision: modelConfig.SupportsVision,
+		AnalyzeImage:   s.visionAnalyzer,
 	}
 	session := s.assembler.Session(user)
 

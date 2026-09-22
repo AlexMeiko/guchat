@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"strings"
 
 	"github.com/AlexMeiko/guchat/internal/imageproc"
@@ -57,7 +58,7 @@ func (p *ImageProvider) ListTools(ctx context.Context, user service.UserContext)
 	return []service.ToolDefinition{
 		{
 			Name:        ToolReadImage,
-			Description: "读取当前会话工作区中的一张图片。path 必须是 /workspace/ 开头的绝对路径。支持 JPEG、PNG、WebP。每次调用只能读一张图。",
+			Description: "读取当前会话工作区中的一张图片。path 必须是 /workspace/ 开头的绝对路径。支持 JPEG、PNG、WebP。每次调用只能读一张图，且必须说明要从图里得到什么。",
 			Parameters: json.RawMessage(`{
                 "type": "object",
                 "properties": {
@@ -67,10 +68,10 @@ func (p *ImageProvider) ListTools(ctx context.Context, user service.UserContext)
                     },
                     "intent": {
                         "type": "string",
-                        "description": "非视觉模型描述图片时想关注的内容，可选。"
+                        "description": "这次要从图里得到什么。必须说明关注点或目的，例如读出某年的销售额、识别图中文字、比较两根柱子。"
                     }
                 },
-                "required": ["path"],
+                "required": ["path", "intent"],
                 "additionalProperties": false
             }`),
 		},
@@ -100,6 +101,9 @@ func (p *ImageProvider) readImage(ctx context.Context, user service.UserContext,
 			OK:    false,
 			Error: "path is required",
 		})
+	}
+	if input.Intent == "" {
+		return marshalReadImageResult(ReadImageResult{OK: false, Error: "intent is required"})
 	}
 
 	file, info, err := p.workspace.OpenFile(user.UserID, user.ConversationID, input.Path)
@@ -144,6 +148,23 @@ func (p *ImageProvider) readImage(ctx context.Context, user service.UserContext,
 		StoredHeight:   processed.Height,
 		Intent:         input.Intent,
 	}
+
+	// 非视觉模型：把缩放后的副本交给 fallback 视觉模型换取文字描述。
+	// 分析失败不影响图片副本和引用的落库，本轮模型仍会看到“不支持视觉”。
+	if !user.SupportsVision && user.AnalyzeImage != nil {
+		analysis, analyzeErr := user.AnalyzeImage(ctx, processed.MIME, processed.Bytes, input.Intent)
+		switch {
+		case analyzeErr != nil && ctx.Err() != nil:
+			return service.ToolResult{}, ctx.Err()
+		case analyzeErr != nil:
+			log.Printf("read_image vision fallback failed: user_id=%d conversation_id=%s path=%s error=%v", user.UserID, user.ConversationID, info.Path, analyzeErr)
+		default:
+			if text := strings.TrimSpace(analysis); text != "" {
+				result.Analysis = text
+			}
+		}
+	}
+
 	return marshalReadImageResult(result)
 }
 

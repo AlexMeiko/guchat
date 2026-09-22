@@ -45,7 +45,7 @@
   "stored_mime_type": "image/jpeg",
   "stored_width": 2000,
   "stored_height": 1125,
-  "intent": "可选",
+  "intent": "这次要从图里得到什么，必填",
   "analysis": "仅非视觉调用当时写出时才有"
 }
 ```
@@ -59,7 +59,7 @@
 | 非视觉，且没有 analysis | `{"ok": false, "error": "current model does not support vision"}` |
 | 失败（坏文件 / 副本也没了等） | `{"ok": false, "error": "……"}` |
 
-`path` 已在工具参数里，不必再回给模型。`store_key` / 尺寸只留在 `result_json`，组请求时剥掉。视图不回写库。
+`path` / `intent` 已在工具参数里，不必再回给模型。`store_key` / 尺寸只留在 `result_json`，组请求时剥掉。视图不回写库。
 
 `analysis` 是 `read_image` 独有的持久化字段，放在 `ReadImageResult` 中，不提升为通用 `ToolResult` 字段。`ToolReadImage` 和 `ReadImageResult` 属于 `internal/tool`，与 `terminal_exec` 等工具一样，不要放到 `service`。
 
@@ -132,13 +132,14 @@ type ToolResult struct {
 
 - 读工作区原文件、校验 MIME / 大小、解码拿宽高
 - 缩放并编码后写入 `images/{store_key}`（这是之后发给模型的那份）
-- `result_json` 落引用 + `store_key` + 原始/缩放尺寸；不写 base64、不写 `analysis`
+- `intent` 必填；发给模型的视图不带回，组请求时 arguments 里已有
+- `result_json` 落引用 + `store_key` + 原始/缩放尺寸 + `intent`（给库 / SSE，不进模型视图）；不写 base64、不写 `analysis`
 
 ### 3.2 非视觉模型调用
 
 - 同样读原文件、校验、写入 `images/{store_key}`、落引用
-- 允许带 `intent`（想从这张图得到什么）；未传则用默认「详细描述这张图，供无法看图的助手使用」
-- `ImageProvider.readImage` 通过注入的 `VisionAnalyzer` 调用 fallback 视觉模型（带上图和 intent）
+- `intent` 必填；空则工具失败，不读文件。fallback 用主模型给出的目的提问，不再套默认句
+- `ImageProvider.readImage` 通过 `UserContext.AnalyzeImage` 调用 fallback 视觉模型（带上图和 intent）
 - `analysis` 以及 `intent` 写入该条 `result_json`
 - **当轮**把分析文本还给这个非视觉模型
 - 未配置 fallback：不分析；当轮返回「当前模型不支持视觉」；引用仍保存，以后换视觉模型还能附图
@@ -286,9 +287,9 @@ token 粗估：工具文本按发给模型的瘦视图计，图片按张数定�
 2. 配置项：`VISION_FALLBACK_MODEL_ID`、`READ_IMAGE_MAX_BYTES`、`READ_IMAGE_MAX_EDGE`
 3. `WorkspaceManager`：安全打开工作区相对路径（含子目录、防逃逸）；另增会话级 `images/` 读写（不出现在工作区文件 API 里）
 4. 图片编解码 / 等比例缩放（独立小模块 `internal/imageproc`）；CallTool 时写入 `images/{store_key}`，组请求时读副本（EXIF 暂缓，见第 5 节）
-5. 内置工具 `read_image`：校验、落副本和引用；非视觉时由 `ImageProvider` 通过注入的 `VisionAnalyzer` 按 intent 调 fallback，把结果写入 `ReadImageResult.Analysis`
+5. 内置工具 `read_image`：校验、落副本和引用；非视觉时由 `ImageProvider` 通过 `UserContext.AnalyzeImage`（生成服务按 `VISION_FALLBACK_MODEL_ID` 惰性构造的 `AnalyzeImageFunc`）按 intent 调 fallback，把结果写入 `ReadImageResult.Analysis`
 6. `ContextAssembler` 在组请求前复制工具交换记录，按通用图片引用（`store_key` / `analysis`）和第 4 节规则投影：把副本中的 `ToolResult.Result` 替换为瘦 JSON；当前模型能看图时凭 `store_key` 读 `images/`，填入临时的 `ToolResult.Image`。**生成器不读盘、不做策略**，只负责协议；`GenerationService` 不引用工具名；`ImageProvider` 不组视图；原始工具结果不修改、不回写。不要给 `ToolProvider` 加 `ProjectForModel`，也不要加 `ToolResultViewer`
-7. Chat Completions：视觉时 `tool.content` 为 `[text, image_url]`；Responses：视觉时 `function_call_output` 带 `input_image`。主生成和摘要在当前模型能看图时都这样附；不插额外 user
+7. Chat Completions：视觉时 `tool.content` 为 `[text, image_url]`；Responses：视觉时 `function_call_output` 带 `input_image`。主生成和摘要在当前模型能看图时都这样附；不插额外 user。`GenerateMessage.Image` 让普通 user 消息也能带图（`[text, image_url]` / `[input_text, input_image]`，空正文时只发图片段），目前只有 fallback 描述请求使用
 8. token 粗估按图片张数定额
 9. README / `docs/api.md` / `.env.example`
 
@@ -308,20 +309,20 @@ token 粗估：工具文本按发给模型的瘦视图计，图片按张数定�
 - 下载 / 删除和 `read_image` 只接受 `/workspace/...` 路径并支持子目录；Linux 使用 `O_NOFOLLOW` 打开文件，逐段 symlink 检查已实现，但并发替换目录的竞态仍未完全消除。
 - 会话级 `images/` 存储、`OpenStoredImage`/`WriteStoredImage` 和 JPEG/PNG/WebP 检测、解码、最长边缩放、再编码已实现；副本按原始字节 SHA-256 寻址，随会话目录删除。
 - `ImageProvider` 已注册且不依赖 `SANDBOX_ENABLED`；`GenerationService` 已把当前模型的 `SupportsVision` 传入 `ListTools` 和 `CallTool`。`read_image` 对视觉和非视觉模型都会出现在工具列表中。
-- 通用运输结构已有：`GenerateImage`，以及标记为 `json:"-"` 的 `ToolResult.Image`。
+- 通用运输结构已有：`GenerateImage`、标记为 `json:"-"` 的 `ToolResult.Image`，以及 `GenerateMessage.Image`（仅 fallback 请求使用）。
 - `ToolReadImage` / `ReadImageResult` 已在 `internal/tool`。
 - `ContextAssembler` 已抽出；`Process` 调度 `BindHistory` / `View` / `Prefix` / `Round`。组请求时按 `store_key` / `analysis` 投影，视觉模型读 `images/` 填 `Image`；落库 / SSE 仍用原始引用。
 - Chat Completions 的 `[text, image_url]`、Responses 的 `input_image`，以及 token 按张定额（1200）已接上。摘要与主生成共用 `View`。
+- 非视觉模型的 fallback 已接通：`GenerationService` 按 `VISION_FALLBACK_MODEL_ID` 惰性构造 `AnalyzeImageFunc` 放进 `UserContext.AnalyzeImage`；`ImageProvider.readImage` 在 `!SupportsVision && AnalyzeImage != nil` 时用**缩放后的副本**和必填 `intent` 调用，成功则写入 `ReadImageResult.Analysis`。fallback 失败只写日志、不写进结果 JSON，也不阻断工具结果落库；`ctx` 取消时向上返回取消错误。
 
 当前 `read_image` 工具的实际返回策略：
 
-- 成功时只返回引用 JSON（`ok`、`path`、原图/副本 MIME、尺寸、大小、`store_key`，以及可选 `intent`），图片字节只写入会话 `images/`，不写入工具结果 JSON、数据库字段或 SSE。
-- 失败时返回 `{"ok":false,"error":"..."}`；当前实现还没有 fallback，因此不会生成 `analysis`。
+- 成功时只返回引用 JSON（`ok`、`path`、原图/副本 MIME、尺寸、大小、`store_key`、必填 `intent`），图片字节只写入会话 `images/`，不写入工具结果 JSON、数据库字段或 SSE。发给模型的瘦视图不含 `intent`。
+- 失败时返回 `{"ok":false,"error":"..."}`。非视觉模型且配置了 fallback 时，工具会调用 fallback 并把描述写入 `analysis`；fallback 自身失败只写日志，结果 JSON 仍是成功引用，也不带 error。
 - 发给模型的视图由组装器按当前模型过滤：视觉发 `{"ok":true}` 加副本图片；非视觉无 analysis 发“不支持视觉”；有 analysis 则只发分析文本。
 
 尚未完成：
 
-- 非视觉模型调用时的 fallback 模型校验、调用、`analysis` 落库及取消/错误处理；`VISION_FALLBACK_MODEL_ID` 当前只完成配置读取，尚未接入。
 - 副本临时文件写完后原子发布、路径检查与读写之间的完整竞态防护、解码前像素数上限。
 - 端到端和单元测试；当前 `go test ./...` 通过，但仓库没有 `*_test.go`。用真实视觉模型验收「能看图」仍待做。
 
@@ -330,6 +331,7 @@ token 粗估：工具文本按发给模型的瘦视图计，图片按张数定�
 - `ToolResult.Parts` 和单独的 `ModelView` **都不做**。`analysis` 保存在 `ReadImageResult` 的原始 JSON 中。
 - 不给 `ToolProvider` 加 `ProjectForModel`，也不加 `ToolResultViewer`。模型视图由 `ContextAssembler` 认 `store_key` / `analysis` 并读盘完成；`ImageProvider` 只负责 CallTool。生成器只消费文本与图片字节，不识别 `store_key`。
 - `ToolReadImage` / `ReadImageResult` 属于 `internal/tool`，不属于 `service`。组装器只用图片引用字段子集，不解完整工具结果类型。
+- fallback 的注入形态从“构造 `ImageProvider` 时注入 `VisionAnalyzer` 接口”改为“`UserContext.AnalyzeImage` 函数字段”，由 `GenerationService` 惰性构造（`newVisionAnalyzer`）。好处：`ImageProvider` 构造签名不变、main 里不用重排依赖、`tool` 不依赖 `ModelService`/`GeneratorFactory`、未读图的请求零开销；代价是 `UserContext` 从纯数据变成带能力的数据（4 个 provider 里只有 `ImageProvider` 用得上）。
 - 只接受 `/workspace/...` 开头的路径（初稿的 `foo.png` 相对形式放弃）
 - GIF 不支持；APNG 暂不拦截（以后做）
 - EXIF 未做（以后做）
@@ -339,7 +341,7 @@ token 粗估：工具文本按发给模型的瘦视图计，图片按张数定�
 
 - 非 Linux 编译失败：`open_regular_other.go` 的 `createExclusiveNoFollow` 中 `info` 未使用；前置 `Lstat` 本身也可移除。
 - 路径检查与实际读 / 删之间存在竞态；使用受工作区目录句柄约束的操作，并保留普通文件限制。
-- `path.Clean("/" + p)` 会把越界输入重映射回工作区；`/..` 前缀判断还会误拒 `..notes.txt`。需要按路径段检查。
+- `path.Clean("/" + p)` 会把越界输入重映射回工作区（如 `/workspace/../x` 被解析成 `x` 而非拒绝）。需要按路径段检查。~~`/..` 前缀判断误拒 `..notes.txt`~~（已随子目录列表/上传改动删除该判断，2026-09-11）。
 - 副本文件在写完前就可见，已有空文件会被当成成功缓存；需要临时文件写完后原子发布。
 - 原图只限制压缩后的字节数，尚无解码前像素数上限；完整解码后再缩放无法限制解码内存。
 
@@ -348,13 +350,14 @@ token 粗估：工具文本按发给模型的瘦视图计，图片按张数定�
 1. [x] 工具入口上下文：生成服务已把 `SupportsVision: modelConfig.SupportsVision` 传入 `ListTools` / `CallTool`，`ctx` 也已传入 `readImage`；工具仍对非视觉模型开放。
 2. [x] 通用运输结构：`GenerateImage` 与 `ToolResult.Image` 在 `service`；`ToolReadImage` / `ReadImageResult` 在 `internal/tool`。
 3. [x] 抽出 `ContextAssembler` 并接通生成链路：历史 / 当轮 / 摘要走组装器 `View`（按 `store_key` / `analysis` 投影并读盘）；Chat Completions / Responses 序列化临时 `Image`；token 估算使用瘦文本 + 图片定额。压缩循环仍在 `Process`。
-4. 最后接 fallback：`ImageProvider.readImage` 只在非视觉模型实际调用时通过注入的 `VisionAnalyzer` 执行；fallback 模型必须启用且支持视觉。保存 `ReadImageResult.Analysis`，后续重放只读已有结果，不补分析。`internal/imageproc` 保持纯图片处理。
+4. [x] 最后接 fallback：`ImageProvider.readImage` 只在非视觉模型实际调用时通过 `UserContext.AnalyzeImage` 执行；fallback 模型必须启用且支持视觉。保存 `ReadImageResult.Analysis`，后续重放只读已有结果，不补分析。`internal/imageproc` 保持纯图片处理。
 
-下一片修改范围（完成第 4 项）：
+第 4 项落地情况：
 
-- 校验 `VISION_FALLBACK_MODEL_ID` 指向已启用且 `supports_vision=true` 的模型。
-- 非视觉 `CallTool` 当时通过 `VisionAnalyzer` 调 fallback，把 `analysis` 写入该条 `ReadImageResult`；请求取消与错误不得打断主生成之外的策略按本节 3.2。
-- fallback 请求不带工具。重放和换模型不补分析。
+- 校验（已启用 + `supports_vision=true`）在**每次调用分析时**进行，不在启动或请求建立阶段做，因此配置改了立刻生效，也不会因为环境变量写错而让进程起不来。
+- `VISION_FALLBACK_MODEL_ID == 0` 时 `AnalyzeImage` 为 nil，`ImageProvider` 不启用分析；非视觉模型仍走“不支持视觉”视图。
+- fallback 请求不带工具，且用缩放后的副本、按必填 `intent` 提问。
+- 分析失败不写进结果 JSON（否则同一条记录换视觉模型重放时会显示为失败而不是附图），只打日志；请求取消沿 `ctx` 向上返回。
 
 第 3 项验收点：
 
