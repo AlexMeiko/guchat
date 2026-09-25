@@ -4,15 +4,22 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"image"
 	"image/jpeg"
 	"image/png"
+	"io"
 
 	"golang.org/x/image/draw"
 	"golang.org/x/image/webp"
 )
 
-const jpegQuality = 90
+const (
+	jpegQuality    = 90
+	maxImagePixels = 100000000
+)
+
+var errImageTooLarge = errors.New("image exceeds pixel limit")
 
 type Options struct {
 	MaxEdge int
@@ -84,16 +91,37 @@ func Process(original []byte, opts Options) (*Result, error) {
 
 func decodeImage(data []byte, mime string) (image.Image, error) {
 	r := bytes.NewReader(data)
+	var (
+		config  image.Config
+		decoder func(io.Reader) (image.Image, error)
+		err     error
+	)
+
 	switch mime {
 	case MIMEJPEG:
-		return jpeg.Decode(r)
+		config, err = jpeg.DecodeConfig(r)
+		decoder = jpeg.Decode
 	case MIMEPNG:
-		return png.Decode(r)
+		config, err = png.DecodeConfig(r)
+		decoder = png.Decode
 	case MIMEWebP:
-		return webp.Decode(r)
+		config, err = webp.DecodeConfig(r)
+		decoder = webp.Decode
 	default:
 		return nil, ErrUnsupportedFormat
 	}
+	if err != nil {
+		return nil, err
+	}
+
+	if config.Width < 1 || config.Height < 1 {
+		return nil, ErrUnsupportedFormat
+	}
+	if uint64(config.Width) > maxImagePixels/uint64(config.Height) {
+		return nil, errImageTooLarge
+	}
+
+	return decoder(bytes.NewReader(data))
 }
 
 func fitSize(w, h, maxEdge int) (int, int) {
