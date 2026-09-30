@@ -94,10 +94,20 @@ func (g *OpenAIChatCompletionsGenerator) Generate(ctx context.Context, input ser
 
 type openAIChatCompletionMessage struct {
 	Role             string               `json:"role"`
-	Content          string               `json:"content,omitempty"`
+	Content          any                  `json:"content,omitempty"`
 	ReasoningContent string               `json:"reasoning_content,omitempty"`
 	ToolCallID       string               `json:"tool_call_id,omitempty"`
 	ToolCalls        []openAIChatToolCall `json:"tool_calls,omitempty"`
+}
+
+type openAIChatToolContent struct {
+	Type     string              `json:"type"`
+	Text     string              `json:"text,omitempty"`
+	ImageURL *openAIChatImageURL `json:"image_url,omitempty"`
+}
+
+type openAIChatImageURL struct {
+	URL string `json:"url"`
 }
 
 type openAIChatToolCall struct {
@@ -167,7 +177,7 @@ func newOpenAIChatToolCallMessage(content string, exchanges []service.ToolExchan
 
 	return openAIChatCompletionMessage{
 		Role:             entity.MessageRoleAssistant,
-		Content:          strings.TrimSpace(content),
+		Content:          omitEmptyString(strings.TrimSpace(content)),
 		ReasoningContent: strings.TrimSpace(reasoningContent),
 		ToolCalls:        toolCalls,
 	}
@@ -234,16 +244,23 @@ func buildOpenAIChatCompletionMessages(
 		if message.Role == entity.MessageRoleAssistant {
 			content = strings.TrimSpace(toolCallTagRe.ReplaceAllString(content, ""))
 		}
-		if content == "" {
+
+		dataURL := generateImageDataURL(message.Image)
+		if content == "" && dataURL == "" {
 			continue
 		}
 
-		item := openAIChatCompletionMessage{
-			Role:    message.Role,
-			Content: content,
-		}
+		item := openAIChatCompletionMessage{Role: message.Role, Content: content}
 		if message.Role == entity.MessageRoleAssistant {
 			item.ReasoningContent = strings.TrimSpace(message.ReasoningContent)
+		}
+		if dataURL != "" {
+			parts := make([]openAIChatToolContent, 0, 2)
+			if content != "" {
+				parts = append(parts, openAIChatToolContent{Type: "text", Text: content})
+			}
+			parts = append(parts, openAIChatToolContent{Type: "image_url", ImageURL: &openAIChatImageURL{URL: dataURL}})
+			item.Content = parts
 		}
 		result = append(result, item)
 	}
@@ -386,11 +403,7 @@ func appendOpenAIChatAssistantMessageWithRounds(
 			result = append(result, newOpenAIChatToolCallMessage(content, exchanges, reasoningContent))
 
 			for _, exchange := range exchanges {
-				result = append(result, openAIChatCompletionMessage{
-					Role:       "tool",
-					ToolCallID: exchange.Call.ID,
-					Content:    string(exchange.Result.Result),
-				})
+				result = append(result, newOpenAIChatToolResultMessage(exchange))
 			}
 			continue
 		}
@@ -423,12 +436,26 @@ func appendOpenAIChatAssistantMessageWithLegacyTools(
 	))
 
 	for _, exchange := range message.ToolExchanges {
-		result = append(result, openAIChatCompletionMessage{
-			Role:       "tool",
-			ToolCallID: exchange.Call.ID,
-			Content:    string(exchange.Result.Result),
-		})
+		result = append(result, newOpenAIChatToolResultMessage(exchange))
 	}
 
 	return result
+}
+
+func newOpenAIChatToolResultMessage(ex service.ToolExchange) openAIChatCompletionMessage {
+	text := string(ex.Result.Result)
+	msg := openAIChatCompletionMessage{
+		Role:       "tool",
+		ToolCallID: ex.Call.ID,
+		Content:    text,
+	}
+	dataURL := generateImageDataURL(ex.Result.Image)
+	if dataURL == "" {
+		return msg
+	}
+	msg.Content = []openAIChatToolContent{
+		{Type: "text", Text: text},
+		{Type: "image_url", ImageURL: &openAIChatImageURL{URL: dataURL}},
+	}
+	return msg
 }

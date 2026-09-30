@@ -836,6 +836,7 @@ Authorization: Bearer <access_token>
 
 - 仅返回已启用模型
 - 返回简版信息，不包含 `provider`、`base_url`、`api_key`、`extra_body`
+- `supports_vision` 表示该模型能否直接看图（`read_image` 附图）
 
 成功响应：`200 OK`
 
@@ -843,7 +844,8 @@ Authorization: Bearer <access_token>
 [
   {
     "id": 1,
-    "name": "DeepSeek R1"
+    "name": "DeepSeek R1",
+    "supports_vision": false
   }
 ]
 ```
@@ -913,7 +915,8 @@ Authorization: Bearer <access_token>
     "temperature": 0.3,
     "top_p": 0.95
   },
-  "is_enabled": true
+  "is_enabled": true,
+  "supports_vision": false
 }
 ```
 
@@ -921,6 +924,7 @@ Authorization: Bearer <access_token>
 
 - `extra_body` 可省略；省略时等价于空对象
 - `extra_body` 必须是 JSON object，否则返回 `400 invalid extra_body`
+- `supports_vision` 可省略，默认 `false`；为 `true` 时 `read_image` 会把图附在 tool 结果里
 - 创建 / 更新模型配置时不会校验 provider 是否受支持；生成时才根据 provider 选择生成器。当前内置可用 provider：
   - `openai`
   - `openai_responses`
@@ -944,6 +948,7 @@ Authorization: Bearer <access_token>
     "top_p": 0.95
   },
   "is_enabled": true,
+  "supports_vision": false,
   "created_at": "2026-03-20T18:00:00+08:00",
   "updated_at": "2026-03-20T18:00:00+08:00"
 }
@@ -1040,7 +1045,7 @@ Authorization: Bearer <access_token>
 
 ### 5.8 工作区
 
-工作区文件落在当前会话目录，不入库。路径参数 `:conversation_id` 必须属于当前用户。列表、上传、下载、删除都只针对工作区根目录中的单层文件名，不接受路径分隔符。
+工作区文件落在当前会话目录，不入库。路径参数 `:conversation_id` 必须属于当前用户。列表和上传仍只针对工作区根目录中的单层文件名；下载和删除接受容器内路径 `/workspace/...`，可含子目录。
 
 #### `GET /api/conversations/:conversation_id/files`
 
@@ -1106,14 +1111,14 @@ Authorization: Bearer <access_token>
 
 查询参数：
 
-- `name`：必填，工作区根目录中的文件名
+- `path`：必填，工作区路径，如 `/workspace/foo/bar.png`
 
 成功响应：`200 OK`，响应体为文件内容；`Content-Disposition` 为 attachment。
 
 常见失败：
 
 - `400 invalid conversation id`
-- `400 file name is required`
+- `400 file path is required`
 - `400 invalid file name`
 - `400 cannot download directory`
 - `400 cannot download non-regular file`
@@ -1125,15 +1130,16 @@ Authorization: Bearer <access_token>
 
 查询参数：
 
-- `name`：必填，工作区根目录中的文件名
+- `path`：必填，工作区路径，如 `/workspace/foo/bar.png`
 
 成功响应：`204 No Content`
 
 常见失败：
 
 - `400 invalid conversation id`
-- `400 file name is required`
+- `400 file path is required`
 - `400 invalid file name`
+- `400 cannot delete non-regular path`
 - `404 conversation not found`
 - `404 file not found`
 - `500 internal server error`
@@ -1612,6 +1618,9 @@ data: <json>
 | `GENERATION_MAX_TOOL_ROUNDS` | `12` | 单次生成最大工具轮次，最小为 `1` |
 | `GENERATION_RETRY_INTERVAL_SECONDS` | `30` | 最终写库失败后的重试间隔，最小为 `1` |
 | `GENERATION_RETRY_MAX` | `5` | 最终写库失败后的最大重试次数，最小为 `1` |
+| `VISION_FALLBACK_MODEL_ID` | 空 / `0` | 非视觉模型调用 `read_image` 时使用的视觉模型 `models.id` |
+| `READ_IMAGE_MAX_BYTES` | `10485760` | `read_image` 原文件上限，最小为 `1` |
+| `READ_IMAGE_MAX_EDGE` | `2000` | 发给模型的图片副本最长边，最小为 `1` |
 
 ### 9.3 Tavily
 

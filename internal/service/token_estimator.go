@@ -10,6 +10,7 @@ const (
 	estimatedMessageOverhead        = 8
 	estimatedToolDefinitionOverhead = 16
 	estimatedToolExchangeOverhead   = 16
+	estimatedImageTokens            = 1200
 )
 
 func estimateTextTokens(content string) int {
@@ -44,6 +45,9 @@ func estimateGenerateMessageTokens(message GenerateMessage) int {
 		total += estimateTextTokens(exchange.Result.ToolCallID)
 		total += estimateTextTokens(exchange.Result.Name)
 		total += estimateTextTokens(string(exchange.Result.Result))
+		if exchange.Result.Image != nil {
+			total += estimatedImageTokens
+		}
 	}
 
 	return total

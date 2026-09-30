@@ -19,13 +19,19 @@ type OpenAIResponsesGenerator struct {
 
 type openAIResponsesMessage struct {
 	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Content any    `json:"content,omitempty"`
 
 	Type      string `json:"type,omitempty"`
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
-	Output    string `json:"output,omitempty"`
+	Output    any    `json:"output,omitempty"`
+}
+
+type openAIResponsesOutputPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
 }
 
 type openAIResponsesTool struct {
@@ -271,12 +277,21 @@ func buildOpenAIInputMessages(messages []service.GenerateMessage) []openAIRespon
 			content = strings.TrimSpace(toolCallTagRe.ReplaceAllString(content, ""))
 		}
 
-		if content != "" {
-			result = append(result, openAIResponsesMessage{
-				Role:    message.Role,
-				Content: content,
-			})
+		dataURL := generateImageDataURL(message.Image)
+		if content == "" && dataURL == "" {
+			continue
 		}
+
+		item := openAIResponsesMessage{Role: message.Role, Content: content}
+		if dataURL != "" {
+			parts := make([]openAIResponsesOutputPart, 0, 2)
+			if content != "" {
+				parts = append(parts, openAIResponsesOutputPart{Type: "input_text", Text: content})
+			}
+			parts = append(parts, openAIResponsesOutputPart{Type: "input_image", ImageURL: dataURL})
+			item.Content = parts
+		}
+		result = append(result, item)
 	}
 
 	return result
@@ -311,11 +326,7 @@ func appendOpenAIResponsesAssistantMessageWithRounds(
 				Name:      ex.Call.Name,
 				Arguments: string(ex.Call.Arguments),
 			})
-			result = append(result, openAIResponsesMessage{
-				Type:   "function_call_output",
-				CallID: ex.Call.ID,
-				Output: string(ex.Result.Result),
-			})
+			result = append(result, newOpenAIResponsesFunctionOutput(ex))
 		}
 	}
 
@@ -341,14 +352,28 @@ func appendOpenAIResponsesAssistantMessageWithLegacyTools(
 			Name:      ex.Call.Name,
 			Arguments: string(ex.Call.Arguments),
 		})
-		result = append(result, openAIResponsesMessage{
-			Type:   "function_call_output",
-			CallID: ex.Call.ID,
-			Output: string(ex.Result.Result),
-		})
+		result = append(result, newOpenAIResponsesFunctionOutput(ex))
 	}
 
 	return result
+}
+
+func newOpenAIResponsesFunctionOutput(ex service.ToolExchange) openAIResponsesMessage {
+	text := string(ex.Result.Result)
+	msg := openAIResponsesMessage{
+		Type:   "function_call_output",
+		CallID: ex.Call.ID,
+		Output: text,
+	}
+	dataURL := generateImageDataURL(ex.Result.Image)
+	if dataURL == "" {
+		return msg
+	}
+	msg.Output = []openAIResponsesOutputPart{
+		{Type: "input_text", Text: text},
+		{Type: "input_image", ImageURL: dataURL},
+	}
+	return msg
 }
 
 // takeOpenAIResponsesExtraTools 取出ExtraBody中的Tools,并移除相应字段

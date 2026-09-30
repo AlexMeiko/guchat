@@ -59,16 +59,17 @@ CREATE TABLE messages
 
 CREATE TABLE models
 (
-    id         BIGINT PRIMARY KEY AUTO_INCREMENT,
-    name       VARCHAR(64)  NOT NULL,
-    provider   VARCHAR(32)  NOT NULL,
-    model_key  VARCHAR(64)  NOT NULL,
-    base_url   VARCHAR(255) NOT NULL,
-    api_key    VARCHAR(255) NOT NULL,
-    extra_body TEXT         NOT NULL,
-    is_enabled BOOLEAN      NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    id              BIGINT PRIMARY KEY AUTO_INCREMENT,
+    name            VARCHAR(64)  NOT NULL,
+    provider        VARCHAR(32)  NOT NULL,
+    model_key       VARCHAR(64)  NOT NULL,
+    base_url        VARCHAR(255) NOT NULL,
+    api_key         VARCHAR(255) NOT NULL,
+    extra_body      TEXT         NOT NULL,
+    is_enabled      BOOLEAN      NOT NULL DEFAULT TRUE,
+    supports_vision BOOLEAN      NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE = InnoDB;
 
 CREATE TABLE tool_calls

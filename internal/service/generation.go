@@ -49,11 +49,13 @@ type GenerationService struct {
 	generatorFactory     GeneratorFactory
 	runtimeManager       *stream.Manager
 	toolProviderManager  *ToolProviderManager
+	assembler            *ContextAssembler
 	toolCallRepo         *repository.ToolCallRepository
 	generationRoundRepo  *repository.GenerationRoundRepository
 	contextTokenLimit    int
 	contextCompressRatio float64
 	maxToolRounds        int
+	visionAnalyzer       AnalyzeImageFunc
 	retryInterval        time.Duration
 	retryMax             int
 
@@ -73,11 +75,13 @@ func NewGenerationService(
 	generatorFactory GeneratorFactory,
 	runtimeManager *stream.Manager,
 	toolProviderManager *ToolProviderManager,
+	assembler *ContextAssembler,
 	toolCallRepo *repository.ToolCallRepository,
 	generationRoundRepo *repository.GenerationRoundRepository,
 	contextTokenLimit int,
 	contextCompressRatio float64,
 	maxToolRounds int,
+	visionFallbackModelID int64,
 	retryInterval time.Duration,
 	retryMax int,
 ) *GenerationService {
@@ -88,28 +92,17 @@ func NewGenerationService(
 		generatorFactory:     generatorFactory,
 		runtimeManager:       runtimeManager,
 		toolProviderManager:  toolProviderManager,
+		assembler:            assembler,
 		toolCallRepo:         toolCallRepo,
 		generationRoundRepo:  generationRoundRepo,
 		contextTokenLimit:    contextTokenLimit,
 		contextCompressRatio: contextCompressRatio,
 		maxToolRounds:        maxToolRounds,
+		visionAnalyzer:       newVisionAnalyzer(modelService, generatorFactory, visionFallbackModelID),
 		retryInterval:        retryInterval,
 		retryMax:             retryMax,
 		retryItems:           make(map[string]*generationRetryItem),
 	}
-}
-
-func newGenerateMessages(messages []entity.Message) []GenerateMessage {
-	result := make([]GenerateMessage, 0, len(messages))
-	for _, message := range messages {
-		result = append(result, GenerateMessage{
-			ID:               message.ID,
-			Role:             message.Role,
-			Content:          message.Content,
-			ReasoningContent: message.ReasoningContent,
-		})
-	}
-	return result
 }
 
 func newSummaryGenerateMessage(summaryContent string) *GenerateMessage {
@@ -244,14 +237,18 @@ func (s *GenerationService) Process(
 		return fail(err)
 	}
 
-	// 开始构造带工具的上下文
-	generateMessages := newGenerateMessages(generationContext.Messages)
+	user := UserContext{
+		UserID:         userID,
+		ConversationID: conversationID,
+		SupportsVision: modelConfig.SupportsVision,
+		AnalyzeImage:   s.visionAnalyzer,
+	}
+	session := s.assembler.Session(user)
 
-	// 查询每条信息调用过的工具，并把工具调用结果构造成工具交换记录放到上下文里面
-	assistantMessageIDs := make([]string, 0)
-	for i := range generateMessages {
-		if generateMessages[i].Role == entity.MessageRoleAssistant {
-			assistantMessageIDs = append(assistantMessageIDs, generateMessages[i].ID)
+	assistantMessageIDs := make([]string, 0, len(generationContext.Messages))
+	for _, message := range generationContext.Messages {
+		if message.Role == entity.MessageRoleAssistant {
+			assistantMessageIDs = append(assistantMessageIDs, message.ID)
 		}
 	}
 
@@ -265,12 +262,14 @@ func (s *GenerationService) Process(
 		return fail(err)
 	}
 
-	toolExchangesByMessageID := groupToolExchangesByMessageID(toolCallRecords)
-	generationRoundsByMessageID := groupGenerationRoundsByMessageID(roundRecords)
-
-	for i := range generateMessages {
-		generateMessages[i].ToolExchanges = toolExchangesByMessageID[generateMessages[i].ID]
-		generateMessages[i].GenerationRounds = generationRoundsByMessageID[generateMessages[i].ID]
+	generateMessages := s.assembler.BindHistory(
+		generationContext.Messages,
+		toolCallRecords,
+		roundRecords,
+	)
+	generateMessages, err = session.View(ctx, generateMessages)
+	if err != nil {
+		return fail(err)
 	}
 
 	workingSummary := generationContext.SummaryContent
@@ -294,10 +293,7 @@ func (s *GenerationService) Process(
 
 	var tools []ToolDefinition
 	if toolMode == ToolModeAuto {
-		tools, err = s.toolProviderManager.ListTools(ctx, UserContext{
-			UserID:         userID,
-			ConversationID: conversationID,
-		})
+		tools, err = s.toolProviderManager.ListTools(ctx, user)
 		if err != nil {
 			return fail(err)
 		}
@@ -334,18 +330,7 @@ func (s *GenerationService) Process(
 			}
 
 			if summaryEnd > 0 {
-				summaryMessages := make([]GenerateMessage, 0, summaryEnd+2)
-
-				if promptMemoryMessage != nil {
-					summaryMessages = append(summaryMessages, *promptMemoryMessage)
-				}
-
-				if summaryMessage := newSummaryGenerateMessage(workingSummary); summaryMessage != nil {
-					summaryMessages = append(summaryMessages, *summaryMessage)
-				}
-
-				summaryMessages = append(summaryMessages, buffer[:summaryEnd]...)
-
+				summaryMessages := s.assembler.Prefix(workingSummary, promptMemoryMessage, buffer[:summaryEnd])
 				summary, err := generateSummary(ctx, generator, modelConfig, summaryMessages, tools)
 				if err != nil {
 					return fail(err)
@@ -380,15 +365,7 @@ func (s *GenerationService) Process(
 		bufferTokens += nextTokens
 	}
 
-	generateMessages = buffer
-
-	if summaryMessage := newSummaryGenerateMessage(workingSummary); summaryMessage != nil {
-		generateMessages = append([]GenerateMessage{*summaryMessage}, generateMessages...)
-	}
-
-	if promptMemoryMessage != nil {
-		generateMessages = append([]GenerateMessage{*promptMemoryMessage}, generateMessages...)
-	}
+	generateMessages = s.assembler.Prefix(workingSummary, promptMemoryMessage, buffer)
 
 	task.Start()
 
@@ -410,23 +387,18 @@ func (s *GenerationService) Process(
 	for round := 1; round <= s.maxToolRounds; round++ {
 		var calls []ToolCall
 
-		roundMessages := make([]GenerateMessage, 0, len(generateMessages)+1)
-		roundMessages = append(roundMessages, generateMessages...)
-
 		snapshot := task.Snapshot()
 		contentStartOffset := len(snapshot.Content)
 		reasoningStartOffset := len(snapshot.ReasoningContent)
 
-		if snapshot.Content != "" || len(toolExchanges) > 0 || len(generationRounds) > 0 {
-			roundMessages = append(roundMessages, GenerateMessage{
-				ID:               assistantMessageID,
-				Role:             entity.MessageRoleAssistant,
-				Content:          snapshot.Content,
-				ReasoningContent: snapshot.ReasoningContent,
-				ToolExchanges:    toolExchanges,
-				GenerationRounds: generationRounds,
-			})
-		}
+		roundMessages := s.assembler.Round(generateMessages, GenerateMessage{
+			ID:               assistantMessageID,
+			Role:             entity.MessageRoleAssistant,
+			Content:          snapshot.Content,
+			ReasoningContent: snapshot.ReasoningContent,
+			ToolExchanges:    toolExchanges,
+			GenerationRounds: generationRounds,
+		})
 
 		err = generator.Generate(ctx, GenerateInput{
 			Model:    modelConfig,
@@ -520,7 +492,7 @@ func (s *GenerationService) Process(
 			}
 			task.UpdateToolCallRunning(record.ID)
 
-			toolResult, toolErr := s.toolProviderManager.CallTool(ctx, UserContext{UserID: userID, ConversationID: conversationID}, modelCall.Name, modelCall.Arguments)
+			toolResult, toolErr := s.toolProviderManager.CallTool(ctx, user, modelCall.Name, modelCall.Arguments)
 
 			if toolErr != nil {
 				toolErrorMessage := toolErr.Error()
@@ -532,26 +504,27 @@ func (s *GenerationService) Process(
 					return fail(errors.Join(toolErr, marshalErr))
 				}
 
-				//把失败结果交给AI处理
-				toolResults := ToolResult{
-					ToolCallID: modelCall.ID,
-					Name:       modelCall.Name,
-					Result:     payload,
-				}
-
-				toolExchanges = append(toolExchanges, ToolExchange{
-					Round:  round,
-					Seq:    i + 1,
-					Call:   modelCall,
-					Result: toolResults,
-				})
-
 				markErr := s.toolCallRepo.MarkFailed(ctx, record.ID, string(payload), toolErrorMessage)
 				if markErr != nil {
 					return fail(errors.Join(toolErr, markErr))
 				}
 				task.UpdateToolCallFailed(record.ID, string(payload), toolErrorMessage)
 
+				viewed, viewErr := session.ViewResult(ctx, ToolResult{
+					ToolCallID: modelCall.ID,
+					Name:       modelCall.Name,
+					Result:     payload,
+				})
+				if viewErr != nil {
+					return fail(viewErr)
+				}
+
+				toolExchanges = append(toolExchanges, ToolExchange{
+					Round:  round,
+					Seq:    i + 1,
+					Call:   modelCall,
+					Result: viewed,
+				})
 				continue
 			}
 
@@ -562,11 +535,16 @@ func (s *GenerationService) Process(
 			}
 			task.UpdateToolCallDone(record.ID, string(toolResult.Result))
 
+			viewed, viewErr := session.ViewResult(ctx, toolResult)
+			if viewErr != nil {
+				return fail(viewErr)
+			}
+
 			toolExchanges = append(toolExchanges, ToolExchange{
 				Round:  round,
 				Seq:    i + 1,
 				Call:   modelCall,
-				Result: toolResult,
+				Result: viewed,
 			})
 		}
 	}
@@ -676,50 +654,6 @@ func (s *GenerationService) Retry() {
 		s.removeRetry(item.MessageID)
 		s.runtimeManager.Delete(item.MessageID)
 	}
-}
-
-// 将历史工具调用记录按 assistant_message_id 分组
-func groupToolExchangesByMessageID(records []entity.ToolCall) map[string][]ToolExchange {
-	result := make(map[string][]ToolExchange)
-
-	for _, record := range records {
-		if record.Status != entity.ToolCallStatusDone && record.Status != entity.ToolCallStatusFailed {
-			continue
-		}
-
-		result[record.AssistantMessageID] = append(result[record.AssistantMessageID], ToolExchange{
-			Round: record.Round,
-			Seq:   record.Seq,
-			Call: ToolCall{
-				ID:        record.ProviderCallID,
-				Name:      record.ToolName,
-				Arguments: json.RawMessage(record.ArgumentsJSON),
-			},
-			Result: ToolResult{
-				ToolCallID: record.ProviderCallID,
-				Name:       record.ToolName,
-				Result:     json.RawMessage(record.ResultJSON),
-			},
-		})
-	}
-
-	return result
-}
-
-func groupGenerationRoundsByMessageID(records []entity.GenerationRound) map[string][]GenerationRound {
-	result := make(map[string][]GenerationRound)
-
-	for _, record := range records {
-		result[record.AssistantMessageID] = append(result[record.AssistantMessageID], GenerationRound{
-			Round:                record.Round,
-			ContentStartOffset:   record.ContentStartOffset,
-			ContentEndOffset:     record.ContentEndOffset,
-			ReasoningStartOffset: record.ReasoningStartOffset,
-			ReasoningEndOffset:   record.ReasoningEndOffset,
-		})
-	}
-
-	return result
 }
 
 func newPromptMemoryMessage(items []entity.MemoryItem, toolMode string) *GenerateMessage {

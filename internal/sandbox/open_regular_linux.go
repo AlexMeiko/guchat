@@ -94,3 +94,11 @@ func openRegularForWriteNoFollow(path string, perm os.FileMode) (*os.File, error
 
 	return os.NewFile(uintptr(writeFD), path), nil
 }
+
+func createExclusiveNoFollow(path string, perm os.FileMode) (*os.File, error) {
+	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, uint32(perm.Perm()))
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), path), nil
+}

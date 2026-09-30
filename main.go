@@ -155,6 +155,7 @@ func main() {
 			TavilyBaseURL: cfg.TavilyBaseURL,
 			MemoryService: memoryService,
 		}),
+		tool.NewImageProvider(workspaceManager, cfg.ReadImageMaxBytes, cfg.ReadImageMaxEdge),
 	}
 
 	if sandboxManager != nil {
@@ -203,11 +204,13 @@ func main() {
 		generatorFactory,
 		runtimeManager,
 		toolProviderManager,
+		service.NewContextAssembler(workspaceManager),
 		toolCallRepo,
 		generationRoundRepo,
 		cfg.ContextTokenLimit,
 		cfg.ContextCompressRatio,
 		cfg.GenerationMaxToolRounds,
+		cfg.VisionFallbackModelID,
 		time.Duration(cfg.GenerationRetryInterval)*time.Second,
 		int(cfg.GenerationRetryMax),
 	)

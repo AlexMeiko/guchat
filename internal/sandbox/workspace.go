@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ var ErrFileTooLarge = errors.New("file too large")
 var ErrWorkspaceFileNotFound = errors.New("workspace file not found")
 var ErrWorkspaceItemIsDir = errors.New("workspace item is directory")
 var ErrWorkspaceItemNotRegular = errors.New("workspace item is not regular file")
+var ErrInvalidImageStoreKey = errors.New("invalid image store key")
 
 type WorkspaceFile struct {
 	Name      string
@@ -77,7 +79,7 @@ func (m *WorkspaceManager) DeleteConversation(ctx context.Context, userID int64,
 	return os.RemoveAll(path)
 }
 
-func cleanFileName(name string) (string, error) {
+func parseFileName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", ErrInvalidFileName
@@ -101,6 +103,88 @@ func cleanFileName(name string) (string, error) {
 	return base, nil
 }
 
+func parseWorkspacePath(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", ErrInvalidFileName
+	}
+
+	p := strings.ReplaceAll(raw, "\\", "/")
+
+	if !strings.HasPrefix(p, "/workspace/") {
+		return "", ErrInvalidFileName
+	}
+	p = strings.TrimPrefix(p, "/workspace/")
+	if p == "" {
+		return "", ErrInvalidFileName
+	}
+
+	cleaned := path.Clean("/" + p)
+	if !strings.HasPrefix(cleaned, "/") || strings.HasPrefix(cleaned, "/..") {
+		return "", ErrInvalidFileName
+	}
+	if cleaned == "/" {
+		return "", ErrInvalidFileName
+	}
+	rel := strings.TrimPrefix(cleaned, "/")
+
+	for _, part := range strings.Split(rel, "/") {
+		if part == "" || part == "." || part == ".." {
+			return "", ErrInvalidFileName
+		}
+		if strings.ContainsAny(part, `/\`) {
+			return "", ErrInvalidFileName
+		}
+		for _, r := range part {
+			if unicode.IsControl(r) {
+				return "", ErrInvalidFileName
+			}
+		}
+	}
+
+	return rel, nil
+}
+
+func rejectSymlinkComponents(workspacePath, rel string) error {
+	current := workspacePath
+	for _, part := range strings.Split(rel, "/") {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return ErrWorkspaceFileNotFound
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return ErrWorkspaceItemNotRegular
+		}
+	}
+	return nil
+}
+
+func (m *WorkspaceManager) resolveExistingPath(
+	userID int64,
+	conversationID string,
+	raw string,
+) (string, string, error) {
+	rel, err := parseWorkspacePath(raw)
+	if err != nil {
+		return "", "", err
+	}
+
+	workspacePath, err := m.EnsureWorkspace(userID, conversationID)
+	if err != nil {
+		return "", "", err
+	}
+
+	if err := rejectSymlinkComponents(workspacePath, rel); err != nil {
+		return "", "", err
+	}
+
+	return rel, filepath.Join(workspacePath, filepath.FromSlash(rel)), nil
+}
+
 func (m *WorkspaceManager) SaveFile(
 	userID int64,
 	conversationID string,
@@ -108,7 +192,12 @@ func (m *WorkspaceManager) SaveFile(
 	reader io.Reader,
 	overwrite bool,
 ) (*WorkspaceFile, error) {
-	name, err := cleanFileName(originalName)
+	name, err := parseFileName(originalName)
+	if err != nil {
+		return nil, err
+	}
+
+	rel, err := parseWorkspacePath("/workspace/" + name)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +207,7 @@ func (m *WorkspaceManager) SaveFile(
 		return nil, err
 	}
 
-	targetPath := filepath.Join(workspacePath, name)
+	targetPath := filepath.Join(workspacePath, filepath.FromSlash(rel))
 
 	var file *os.File
 	if overwrite {
@@ -150,8 +239,8 @@ func (m *WorkspaceManager) SaveFile(
 	}
 
 	return &WorkspaceFile{
-		Name:      name,
-		Path:      "/workspace/" + name,
+		Name:      filepath.Base(rel),
+		Path:      "/workspace/" + rel,
 		SizeBytes: info.Size(),
 		IsDir:     false,
 		ModTime:   info.ModTime(),
@@ -189,22 +278,8 @@ func (m *WorkspaceManager) ListFiles(userID int64, conversationID string) ([]Wor
 }
 
 func (m *WorkspaceManager) DeleteItem(userID int64, conversationID string, name string) error {
-	name, err := cleanFileName(name)
+	_, targetPath, err := m.resolveExistingPath(userID, conversationID, name)
 	if err != nil {
-		return err
-	}
-
-	workspacePath, err := m.EnsureWorkspace(userID, conversationID)
-	if err != nil {
-		return err
-	}
-
-	targetPath := filepath.Join(workspacePath, name)
-
-	if _, err := os.Stat(targetPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return ErrWorkspaceFileNotFound
-		}
 		return err
 	}
 
@@ -216,17 +291,10 @@ func (m *WorkspaceManager) OpenFile(
 	conversationID string,
 	name string,
 ) (*os.File, WorkspaceFile, error) {
-	name, err := cleanFileName(name)
+	rel, targetPath, err := m.resolveExistingPath(userID, conversationID, name)
 	if err != nil {
 		return nil, WorkspaceFile{}, err
 	}
-
-	workspacePath, err := m.EnsureWorkspace(userID, conversationID)
-	if err != nil {
-		return nil, WorkspaceFile{}, err
-	}
-
-	targetPath := filepath.Join(workspacePath, name)
 
 	file, info, err := openRegularNoFollow(targetPath)
 	if err != nil {
@@ -234,8 +302,8 @@ func (m *WorkspaceManager) OpenFile(
 	}
 
 	return file, WorkspaceFile{
-		Name:      name,
-		Path:      "/workspace/" + name,
+		Name:      filepath.Base(rel),
+		Path:      "/workspace/" + rel,
 		SizeBytes: info.Size(),
 		IsDir:     false,
 		ModTime:   info.ModTime(),

@@ -12,7 +12,12 @@ type UserContext struct {
 	UserID         int64
 	ConversationID string
 	Role           string
+	SupportsVision bool
+	AnalyzeImage   AnalyzeImageFunc // 生成服务注入，nil 表示未配置 fallback
 }
+
+// AnalyzeImageFunc 把图片交给视觉模型描述，intent 必须非空；只用基础类型，避免 tool 反向依赖生成服务。
+type AnalyzeImageFunc func(ctx context.Context, mimeType string, data []byte, intent string) (string, error)
 
 type ToolCall struct {
 	ID        string          `json:"id"`
@@ -30,6 +35,7 @@ type ToolResult struct {
 	ToolCallID string          `json:"tool_call_id"`
 	Name       string          `json:"name"`
 	Result     json.RawMessage `json:"result"`
+	Image      *GenerateImage  `json:"-"`
 }
 
 type ToolExchange struct {

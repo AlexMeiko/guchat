@@ -96,13 +96,14 @@ func (h *ModelHandler) Create(c *gin.Context) {
 	}
 
 	modelConfig, err := h.modelService.Create(c.Request.Context(), service.CreateModelInput{
-		Name:      req.Name,
-		Provider:  req.Provider,
-		ModelKey:  req.ModelKey,
-		BaseURL:   req.BaseURL,
-		APIKey:    req.APIKey,
-		ExtraBody: extraBody,
-		IsEnabled: req.IsEnabled,
+		Name:           req.Name,
+		Provider:       req.Provider,
+		ModelKey:       req.ModelKey,
+		BaseURL:        req.BaseURL,
+		APIKey:         req.APIKey,
+		ExtraBody:      extraBody,
+		IsEnabled:      req.IsEnabled,
+		SupportsVision: req.SupportsVision,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
@@ -187,13 +188,14 @@ func (h *ModelHandler) Update(c *gin.Context) {
 	}
 
 	modelConfig, err := h.modelService.UpdateByID(c.Request.Context(), id, service.UpdateModelInput{
-		Name:      req.Name,
-		Provider:  req.Provider,
-		ModelKey:  req.ModelKey,
-		BaseURL:   req.BaseURL,
-		APIKey:    req.APIKey,
-		ExtraBody: extraBody,
-		IsEnabled: req.IsEnabled,
+		Name:           req.Name,
+		Provider:       req.Provider,
+		ModelKey:       req.ModelKey,
+		BaseURL:        req.BaseURL,
+		APIKey:         req.APIKey,
+		ExtraBody:      extraBody,
+		IsEnabled:      req.IsEnabled,
+		SupportsVision: req.SupportsVision,
 	})
 
 	if err != nil {
@@ -250,23 +252,25 @@ func (h *ModelHandler) Delete(c *gin.Context) {
 
 func newModelDetailResponse(modelConfig *entity.ModelConfig) model.ModelDetailResponse {
 	return model.ModelDetailResponse{
-		ID:        modelConfig.ID,
-		Name:      modelConfig.Name,
-		Provider:  modelConfig.Provider,
-		ModelKey:  modelConfig.ModelKey,
-		BaseURL:   modelConfig.BaseURL,
-		APIKey:    modelConfig.APIKey,
-		ExtraBody: parseExtraBody(modelConfig.ExtraBody),
-		IsEnabled: modelConfig.IsEnabled,
-		CreatedAt: modelConfig.CreatedAt,
-		UpdatedAt: modelConfig.UpdatedAt,
+		ID:             modelConfig.ID,
+		Name:           modelConfig.Name,
+		Provider:       modelConfig.Provider,
+		ModelKey:       modelConfig.ModelKey,
+		BaseURL:        modelConfig.BaseURL,
+		APIKey:         modelConfig.APIKey,
+		ExtraBody:      parseExtraBody(modelConfig.ExtraBody),
+		IsEnabled:      modelConfig.IsEnabled,
+		SupportsVision: modelConfig.SupportsVision,
+		CreatedAt:      modelConfig.CreatedAt,
+		UpdatedAt:      modelConfig.UpdatedAt,
 	}
 }
 
 func newModelSimpleResponse(modelConfig *entity.ModelConfig) model.ModelSimpleResponse {
 	return model.ModelSimpleResponse{
-		ID:   modelConfig.ID,
-		Name: modelConfig.Name,
+		ID:             modelConfig.ID,
+		Name:           modelConfig.Name,
+		SupportsVision: modelConfig.SupportsVision,
 	}
 }
 
