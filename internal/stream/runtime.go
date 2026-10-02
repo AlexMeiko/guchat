@@ -48,11 +48,16 @@ func NewTask(messageID string, cancel context.CancelFunc) *Task {
 	}
 }
 
-func (t *Task) Start() {
+func (t *Task) Start() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	if t.status != entity.MessageStatusPending {
+		return false
+	}
+
 	t.status = entity.MessageStatusStreaming
+	return true
 }
 
 func (t *Task) Cancel(errMsg string) {

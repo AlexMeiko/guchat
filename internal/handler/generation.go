@@ -45,6 +45,52 @@ func NewGenerationHandler(
 	}
 }
 
+func (h *GenerationHandler) Cancel(c *gin.Context) {
+	conversationID := c.Param("conversation_id")
+	if _, err := uuid.Parse(conversationID); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid conversation id"})
+		return
+	}
+
+	messageID := c.Param("message_id")
+	if _, err := uuid.Parse(messageID); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid message id"})
+		return
+	}
+
+	user, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+
+	if _, err := h.messageService.GetByIDAndConversationID(
+		c.Request.Context(),
+		user.UserID,
+		conversationID,
+		messageID,
+	); err != nil {
+		if errors.Is(err, service.ErrConversationNotFound) {
+			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "conversation not found"})
+			return
+		}
+		if errors.Is(err, service.ErrMessageNotFound) {
+			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "message not found"})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: "internal server error"})
+		return
+	}
+
+	// 幂等：生成可能刚好在这个请求之前结束、内存任务已被回收，
+	// 此时没有可取消的任务，同样按成功处理，由前端重新拉取消息状态即可。
+	if task, ok := h.runtimeManager.Get(messageID); ok {
+		task.Cancel("generation cancelled by user")
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
 func (h *GenerationHandler) Create(c *gin.Context) {
 	conversationID := c.Param("conversation_id")
 	if _, err := uuid.Parse(conversationID); err != nil {

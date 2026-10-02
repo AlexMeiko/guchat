@@ -157,6 +157,7 @@ Authorization: Bearer <access_token>
 | 消息 | PATCH | `/api/conversations/:conversation_id/messages/:message_id` | Yes | user/admin |
 | 消息 | DELETE | `/api/conversations/:conversation_id/messages/:message_id` | Yes | user/admin |
 | 生成 | POST | `/api/conversations/:conversation_id/messages/:message_id/generation` | Yes | user/admin |
+| 生成 | POST | `/api/conversations/:conversation_id/messages/:message_id/generation/cancel` | Yes | user/admin |
 | 生成 | GET | `/api/conversations/:conversation_id/messages/:message_id/events` | Yes | user/admin |
 | 记忆 | GET | `/api/memory` | Yes | user/admin |
 | 记忆 | PATCH | `/api/memory/:id/status` | Yes | user/admin |
@@ -677,6 +678,27 @@ Authorization: Bearer <access_token>
 - `404 message not found`
 - `500 internal server error`
 - `500 streaming unsupported`
+
+#### `POST /api/conversations/:conversation_id/messages/:message_id/generation/cancel`
+
+说明：
+
+- 路径中的 `:message_id` 是要中止的 assistant 消息 ID
+- 若该消息仍有内存中的生成任务，服务端会取消该任务；没有正在运行的任务时请求不产生任何变更
+- 被中止的消息状态为 `failed`，`error_message` 为 `generation cancelled by user`，前端可通过 `message.failed` 事件感知
+- 已生成的部分内容会保留在 `content` / `reasoning_content` 中，不会被清空
+- 与 `DELETE .../messages/:message_id` 的区别：本接口只中止生成，保留消息记录
+- 本接口是幂等的：生成刚好在此之前结束时同样返回成功，前端重新拉取消息状态即可
+
+成功响应：`204 No Content`
+
+常见失败：
+
+- `400 invalid conversation id`
+- `400 invalid message id`
+- `404 conversation not found`
+- `404 message not found`
+- `500 internal server error`
 
 ---
 

@@ -194,11 +194,17 @@ func (s *GenerationService) Process(
 		return ErrGenerationTaskNotFound
 	}
 
+	// ctx 会被「中止生成」和「删除消息」cancel 掉，但「把最终状态写回数据库」必须照常完成：
+	// 用被取消的 ctx 写库时 database/sql 会直接返回 context.Canceled、SQL 根本不发出，
+	// 消息就会一直停在 streaming，要等重试循环（最长一个重试间隔）才补上。
+	// WithoutCancel 保留 ctx 上的值，只去掉取消信号和 deadline。
+	terminalCtx := context.WithoutCancel(ctx)
+
 	fail := func(cause error) error {
 		task.Failed(cause.Error())
 		snapshot := task.Snapshot()
 
-		if err := s.messageService.UpdateGeneratedMessage(ctx, userID, UpdateGeneratedMessageInput{
+		if err := s.messageService.UpdateGeneratedMessage(terminalCtx, userID, UpdateGeneratedMessageInput{
 			ConversationID:   conversationID,
 			MessageID:        assistantMessageID,
 			Content:          snapshot.Content,
@@ -367,7 +373,9 @@ func (s *GenerationService) Process(
 
 	generateMessages = s.assembler.Prefix(workingSummary, promptMemoryMessage, buffer)
 
-	task.Start()
+	if !task.Start() {
+		return fail(context.Canceled)
+	}
 
 	if err := s.messageService.UpdateGeneratedMessage(ctx, userID, UpdateGeneratedMessageInput{
 		ConversationID:   conversationID,
@@ -555,7 +563,9 @@ func (s *GenerationService) Process(
 
 	snapshot := task.Snapshot()
 
-	if err := s.messageService.UpdateGeneratedMessage(ctx, userID, UpdateGeneratedMessageInput{
+	// 同样用 terminalCtx：取消可能刚好落在「模型已正常收尾」和这次写库之间，
+	// 那时 ctx 已被 cancel，用 ctx 会让这条 done/failed 落库静默失败。
+	if err := s.messageService.UpdateGeneratedMessage(terminalCtx, userID, UpdateGeneratedMessageInput{
 		ConversationID:   conversationID,
 		MessageID:        assistantMessageID,
 		Content:          snapshot.Content,

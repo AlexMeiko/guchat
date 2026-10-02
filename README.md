@@ -184,6 +184,7 @@ Authorization: Bearer <access_token>
 | 消息 | `PATCH /api/conversations/:conversation_id/messages/:message_id` | 更新消息正文 |
 | 消息 | `DELETE /api/conversations/:conversation_id/messages/:message_id` | 删除消息 |
 | 生成 | `POST /api/conversations/:conversation_id/messages/:message_id/generation` | 触发 AI 回复生成 |
+| 生成 | `POST /api/conversations/:conversation_id/messages/:message_id/generation/cancel` | 中止进行中的生成 |
 | 生成 | `GET /api/conversations/:conversation_id/messages/:message_id/events` | 订阅 SSE 事件 |
 | 记忆 | `GET /api/memory` | 获取当前用户可管理的私有记忆 |
 | 记忆 | `PATCH /api/memory/:id/status` | 更新记忆状态 |
