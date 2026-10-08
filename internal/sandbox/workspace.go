@@ -20,6 +20,7 @@ var ErrFileTooLarge = errors.New("file too large")
 var ErrWorkspaceFileNotFound = errors.New("workspace file not found")
 var ErrWorkspaceItemIsDir = errors.New("workspace item is directory")
 var ErrWorkspaceItemNotRegular = errors.New("workspace item is not regular file")
+var ErrWorkspaceItemNotDir = errors.New("workspace item is not a directory")
 var ErrInvalidImageStoreKey = errors.New("invalid image store key")
 
 type WorkspaceFile struct {
@@ -120,9 +121,6 @@ func parseWorkspacePath(raw string) (string, error) {
 	}
 
 	cleaned := path.Clean("/" + p)
-	if !strings.HasPrefix(cleaned, "/") || strings.HasPrefix(cleaned, "/..") {
-		return "", ErrInvalidFileName
-	}
 	if cleaned == "/" {
 		return "", ErrInvalidFileName
 	}
@@ -185,9 +183,35 @@ func (m *WorkspaceManager) resolveExistingPath(
 	return rel, filepath.Join(workspacePath, filepath.FromSlash(rel)), nil
 }
 
+// resolveDir 解析列目录 / 上传目标目录：dir 为空表示工作区根目录。
+// 返回工作区相对路径（根为空串）与磁盘绝对路径；目录不存在或不是目录时报错。
+func (m *WorkspaceManager) resolveDir(userID int64, conversationID, dir string) (string, string, error) {
+	if dir == "" {
+		workspacePath, err := m.EnsureWorkspace(userID, conversationID)
+		if err != nil {
+			return "", "", err
+		}
+		return "", workspacePath, nil
+	}
+
+	rel, resolved, err := m.resolveExistingPath(userID, conversationID, dir)
+	if err != nil {
+		return "", "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", "", err
+	}
+	if !info.IsDir() {
+		return "", "", ErrWorkspaceItemNotDir
+	}
+	return rel, resolved, nil
+}
+
 func (m *WorkspaceManager) SaveFile(
 	userID int64,
 	conversationID string,
+	dir string,
 	originalName string,
 	reader io.Reader,
 	overwrite bool,
@@ -197,17 +221,13 @@ func (m *WorkspaceManager) SaveFile(
 		return nil, err
 	}
 
-	rel, err := parseWorkspacePath("/workspace/" + name)
+	dirRel, dirPath, err := m.resolveDir(userID, conversationID, dir)
 	if err != nil {
 		return nil, err
 	}
 
-	workspacePath, err := m.EnsureWorkspace(userID, conversationID)
-	if err != nil {
-		return nil, err
-	}
-
-	targetPath := filepath.Join(workspacePath, filepath.FromSlash(rel))
+	rel := path.Join(dirRel, name)
+	targetPath := filepath.Join(dirPath, name)
 
 	var file *os.File
 	if overwrite {
@@ -239,7 +259,7 @@ func (m *WorkspaceManager) SaveFile(
 	}
 
 	return &WorkspaceFile{
-		Name:      filepath.Base(rel),
+		Name:      name,
 		Path:      "/workspace/" + rel,
 		SizeBytes: info.Size(),
 		IsDir:     false,
@@ -247,13 +267,14 @@ func (m *WorkspaceManager) SaveFile(
 	}, nil
 }
 
-func (m *WorkspaceManager) ListFiles(userID int64, conversationID string) ([]WorkspaceFile, error) {
-	workspacePath, err := m.EnsureWorkspace(userID, conversationID)
+func (m *WorkspaceManager) ListFiles(userID int64, conversationID string, dir string) ([]WorkspaceFile, error) {
+	rel, target, err := m.resolveDir(userID, conversationID, dir)
 	if err != nil {
 		return nil, err
 	}
+	prefix := path.Join("/workspace", rel)
 
-	entries, err := os.ReadDir(workspacePath)
+	entries, err := os.ReadDir(target)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +288,7 @@ func (m *WorkspaceManager) ListFiles(userID int64, conversationID string) ([]Wor
 
 		files = append(files, WorkspaceFile{
 			Name:      entry.Name(),
-			Path:      "/workspace/" + entry.Name(),
+			Path:      prefix + "/" + entry.Name(),
 			SizeBytes: info.Size(),
 			IsDir:     entry.IsDir(),
 			ModTime:   info.ModTime(),

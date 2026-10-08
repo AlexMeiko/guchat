@@ -37,14 +37,22 @@ func (h *WorkspaceHandler) List(c *gin.Context) {
 		return
 	}
 
-	files, err := h.workspaceService.ListFiles(c.Request.Context(), user.UserID, conversationID)
-	if err != nil {
-		if errors.Is(err, service.ErrConversationNotFound) {
-			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "conversation not found"})
-			return
-		}
+	dir := strings.TrimSpace(c.Query("path"))
 
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: "internal server error"})
+	files, err := h.workspaceService.ListFiles(c.Request.Context(), user.UserID, conversationID, dir)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrConversationNotFound):
+			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "conversation not found"})
+		case errors.Is(err, sandbox.ErrInvalidFileName):
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid file path"})
+		case errors.Is(err, sandbox.ErrWorkspaceFileNotFound):
+			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "directory not found"})
+		case errors.Is(err, sandbox.ErrWorkspaceItemNotDir):
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "path is not a directory"})
+		default:
+			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: "internal server error"})
+		}
 		return
 	}
 
@@ -94,10 +102,12 @@ func (h *WorkspaceHandler) Upload(c *gin.Context) {
 	defer file.Close()
 
 	overwrite := c.PostForm("overwrite") == "true"
+	dir := strings.TrimSpace(c.PostForm("path"))
 
 	saved, err := h.workspaceService.SaveFile(c.Request.Context(), user.UserID, service.SaveWorkspaceFileInput{
 		ConversationID: conversationID,
 		FileName:       formFile.Filename,
+		Dir:            dir,
 		Reader:         file,
 		Overwrite:      overwrite,
 	})
@@ -111,6 +121,10 @@ func (h *WorkspaceHandler) Upload(c *gin.Context) {
 			c.JSON(http.StatusConflict, model.ErrorResponse{Error: "file already exists"})
 		case errors.Is(err, sandbox.ErrFileTooLarge):
 			c.JSON(http.StatusRequestEntityTooLarge, model.ErrorResponse{Error: "file too large"})
+		case errors.Is(err, sandbox.ErrWorkspaceFileNotFound):
+			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "directory not found"})
+		case errors.Is(err, sandbox.ErrWorkspaceItemNotDir):
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "path is not a directory"})
 		case errors.Is(err, sandbox.ErrWorkspaceItemNotRegular):
 			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "cannot overwrite non-regular file"})
 		default:

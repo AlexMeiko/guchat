@@ -16,6 +16,7 @@ type WorkspaceService struct {
 type SaveWorkspaceFileInput struct {
 	ConversationID string
 	FileName       string
+	Dir            string
 	Reader         io.Reader
 	Overwrite      bool
 }
@@ -47,6 +48,7 @@ func (s *WorkspaceService) SaveFile(
 	return s.workspaceManager.SaveFile(
 		userID,
 		input.ConversationID,
+		input.Dir,
 		input.FileName,
 		input.Reader,
 		input.Overwrite,
@@ -57,12 +59,13 @@ func (s *WorkspaceService) ListFiles(
 	ctx context.Context,
 	userID int64,
 	conversationID string,
+	dir string,
 ) ([]sandbox.WorkspaceFile, error) {
 	if _, err := s.conversationService.Get(ctx, userID, conversationID); err != nil {
 		return nil, err
 	}
 
-	return s.workspaceManager.ListFiles(userID, conversationID)
+	return s.workspaceManager.ListFiles(userID, conversationID, dir)
 }
 
 func (s *WorkspaceService) DeleteItem(
