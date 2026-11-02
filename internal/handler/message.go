@@ -302,7 +302,7 @@ func (h *MessageHandler) DeleteByIDAndConversationID(c *gin.Context) {
 		return
 	}
 
-	if task, ok := h.runtimeManager.Get(messageID); ok {
+	if task, ok := h.runtimeManager.Get(conversationID, messageID); ok {
 		task.Cancel("message deleted by user")
 	}
 	c.Status(http.StatusNoContent)

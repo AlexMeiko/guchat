@@ -5,6 +5,11 @@ type CreateGenerationRequest struct {
 	ToolMode string `json:"tool_mode"`
 }
 
+type GenerationConflictResponse struct {
+	Error     string `json:"error"`
+	MessageID string `json:"message_id"`
+}
+
 type ToolCallEvent struct {
 	ID           int64  `json:"id"`
 	ProviderID   string `json:"provider_id"`

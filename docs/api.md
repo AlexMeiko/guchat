@@ -683,21 +683,30 @@ Authorization: Bearer <access_token>
 
 说明：
 
-- 路径中的 `:message_id` 是要中止的 assistant 消息 ID
-- 若该消息仍有内存中的生成任务，服务端会取消该任务；没有正在运行的任务时请求不产生任何变更
-- 被中止的消息状态为 `failed`，`error_message` 为 `generation cancelled by user`，前端可通过 `message.failed` 事件感知
+- 路径中的 `:message_id` 是客户端预期正在生成的 assistant 消息 ID。
+- 若该 ID 与会话当前生成任务不匹配，返回 `409 generation changed`，响应中的 `message_id` 是当前任务 ID；客户端可据此同步到最新生成。
+- 匹配时取消该生成任务。被中止消息状态为 `failed`，`error_message` 为 `generation cancelled by user`，前端也可通过 `message.failed` 事件感知。
+- 如果该生成已经结束或当前没有活跃任务，请求按幂等成功处理。
 - 已生成的部分内容会保留在 `content` / `reasoning_content` 中，不会被清空
-- 与 `DELETE .../messages/:message_id` 的区别：本接口只中止生成，保留消息记录
-- 本接口是幂等的：生成刚好在此之前结束时同样返回成功，前端重新拉取消息状态即可
+- 本接口只中止当前生成，保留消息记录；删除消息仍使用 `DELETE .../messages/:message_id`
 
 成功响应：`204 No Content`
+
+冲突响应：`409 Conflict`
+
+```json
+{
+  "error": "generation changed",
+  "message_id": "uuid"
+}
+```
 
 常见失败：
 
 - `400 invalid conversation id`
 - `400 invalid message id`
 - `404 conversation not found`
-- `404 message not found`
+- `409 generation changed`
 - `500 internal server error`
 
 ---

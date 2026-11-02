@@ -15,10 +15,11 @@ import (
 )
 
 type GenerationHandler struct {
-	generationService *service.GenerationService
-	messageService    *service.MessageService
-	toolCallService   *service.ToolCallService
-	runtimeManager    *stream.Manager
+	generationService   *service.GenerationService
+	conversationService *service.ConversationService
+	messageService      *service.MessageService
+	toolCallService     *service.ToolCallService
+	runtimeManager      *stream.Manager
 }
 
 const (
@@ -33,15 +34,17 @@ const (
 
 func NewGenerationHandler(
 	generationService *service.GenerationService,
+	conversationService *service.ConversationService,
 	messageService *service.MessageService,
 	toolCallService *service.ToolCallService,
 	runtimeManager *stream.Manager,
 ) *GenerationHandler {
 	return &GenerationHandler{
-		generationService: generationService,
-		messageService:    messageService,
-		toolCallService:   toolCallService,
-		runtimeManager:    runtimeManager,
+		generationService:   generationService,
+		conversationService: conversationService,
+		messageService:      messageService,
+		toolCallService:     toolCallService,
+		runtimeManager:      runtimeManager,
 	}
 }
 
@@ -63,18 +66,13 @@ func (h *GenerationHandler) Cancel(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.messageService.GetByIDAndConversationID(
+	if _, err := h.conversationService.Get(
 		c.Request.Context(),
 		user.UserID,
 		conversationID,
-		messageID,
 	); err != nil {
 		if errors.Is(err, service.ErrConversationNotFound) {
 			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "conversation not found"})
-			return
-		}
-		if errors.Is(err, service.ErrMessageNotFound) {
-			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "message not found"})
 			return
 		}
 
@@ -84,8 +82,17 @@ func (h *GenerationHandler) Cancel(c *gin.Context) {
 
 	// 幂等：生成可能刚好在这个请求之前结束、内存任务已被回收，
 	// 此时没有可取消的任务，同样按成功处理，由前端重新拉取消息状态即可。
-	if task, ok := h.runtimeManager.Get(messageID); ok {
-		task.Cancel("generation cancelled by user")
+	curMsgID, matched := h.runtimeManager.CancelIfCurrent(
+		conversationID,
+		messageID,
+		"generation cancelled by user",
+	)
+	if curMsgID != "" && !matched {
+		c.JSON(http.StatusConflict, model.GenerationConflictResponse{
+			Error:     "generation changed",
+			MessageID: curMsgID,
+		})
+		return
 	}
 
 	c.Status(http.StatusNoContent)
@@ -154,6 +161,11 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 			return
 		}
 
+		if errors.Is(err, service.ErrGenerationInProgress) {
+			c.JSON(http.StatusConflict, model.ErrorResponse{Error: "generation already in progress"})
+			return
+		}
+
 		if errors.Is(err, service.ErrMessageSeqGapExhausted) {
 			c.JSON(http.StatusConflict, model.ErrorResponse{Error: "message position conflict"})
 			return
@@ -214,7 +226,7 @@ func (h *GenerationHandler) Events(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
-	task, exists := h.runtimeManager.Get(message.ID)
+	task, exists := h.runtimeManager.Get(message.ConversationID, message.ID)
 	if !exists {
 		toolCalls, err := h.toolCallService.ListByAssistantMessageID(c.Request.Context(), message.ID)
 		if err != nil {

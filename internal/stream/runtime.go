@@ -200,25 +200,62 @@ func NewManager() *Manager {
 	}
 }
 
-func (m *Manager) Create(messageID string, cancel context.CancelFunc) *Task {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.tasks[messageID] = NewTask(messageID, cancel)
-	return m.tasks[messageID]
-}
-
-func (m *Manager) Get(messageID string) (*Task, bool) {
+func (m *Manager) Has(conversationID string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	task, ok := m.tasks[messageID]
-	return task, ok
+	_, ok := m.tasks[conversationID]
+	return ok
 }
 
-func (m *Manager) Delete(messageID string) {
+func (m *Manager) Create(conversationID, messageID string, cancel context.CancelFunc) *Task {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	delete(m.tasks, messageID)
+	if m.tasks[conversationID] != nil {
+		return nil
+	}
+
+	m.tasks[conversationID] = NewTask(messageID, cancel)
+	return m.tasks[conversationID]
+}
+
+func (m *Manager) Get(conversationID, messageID string) (*Task, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	task, ok := m.tasks[conversationID]
+	if !ok || task.messageID != messageID {
+		return nil, false
+	}
+	return task, ok
+}
+
+func (m *Manager) CancelIfCurrent(conversationID, messageID, msg string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	task, ok := m.tasks[conversationID]
+	if !ok {
+		return "", false
+	}
+	if task.messageID != messageID {
+		return task.messageID, false
+	}
+
+	task.Cancel(msg)
+	return task.messageID, true
+}
+
+func (m *Manager) Delete(conversationID, messageID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	task, ok := m.tasks[conversationID]
+	if !ok || task.messageID != messageID {
+		return false
+	}
+
+	delete(m.tasks, conversationID)
+	return true
 }

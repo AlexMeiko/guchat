@@ -16,6 +16,7 @@ import (
 
 var (
 	ErrModelDisabled          = errors.New("model disabled")
+	ErrGenerationInProgress   = errors.New("generation already in progress")
 	ErrGenerationTaskNotFound = errors.New("generation task not found")
 )
 
@@ -148,6 +149,9 @@ func (s *GenerationService) Create(
 	if !modelConfig.IsEnabled {
 		return nil, ErrModelDisabled
 	}
+	if s.runtimeManager.Has(input.ConversationID) {
+		return nil, ErrGenerationInProgress
+	}
 
 	assistantMsg, err := s.messageService.CreateMessage(ctx, userID, CreateMessageInput{
 		ConversationID:   input.ConversationID,
@@ -163,7 +167,18 @@ func (s *GenerationService) Create(
 	}
 
 	processCtx, cancel := context.WithCancel(context.Background())
-	s.runtimeManager.Create(assistantMsg.ID, cancel)
+	if s.runtimeManager.Create(assistantMsg.ConversationID, assistantMsg.ID, cancel) == nil {
+		cancel()
+		if err := s.messageService.DeleteByIDAndConversationID(
+			ctx,
+			userID,
+			input.ConversationID,
+			assistantMsg.ID,
+		); err != nil {
+			return nil, err
+		}
+		return nil, ErrGenerationInProgress
+	}
 
 	go func() {
 		_ = s.Process(
@@ -189,7 +204,7 @@ func (s *GenerationService) Process(
 	modelID int64,
 	toolMode string,
 ) error {
-	task, ok := s.runtimeManager.Get(assistantMessageID)
+	task, ok := s.runtimeManager.Get(conversationID, assistantMessageID)
 	if !ok {
 		return ErrGenerationTaskNotFound
 	}
@@ -215,12 +230,12 @@ func (s *GenerationService) Process(
 			if s.shouldRetry(err) {
 				s.addRetry(userID, conversationID, assistantMessageID)
 			} else {
-				s.runtimeManager.Delete(assistantMessageID)
+				s.runtimeManager.Delete(conversationID, assistantMessageID)
 			}
 			return errors.Join(cause, err)
 		}
 
-		s.runtimeManager.Delete(assistantMessageID)
+		s.runtimeManager.Delete(conversationID, assistantMessageID)
 		return cause
 	}
 
@@ -576,12 +591,12 @@ func (s *GenerationService) Process(
 		if s.shouldRetry(err) {
 			s.addRetry(userID, conversationID, assistantMessageID)
 		} else {
-			s.runtimeManager.Delete(assistantMessageID)
+			s.runtimeManager.Delete(conversationID, assistantMessageID)
 		}
 		return err
 	}
 
-	s.runtimeManager.Delete(assistantMessageID)
+	s.runtimeManager.Delete(conversationID, assistantMessageID)
 	return nil
 }
 
@@ -627,11 +642,11 @@ func (s *GenerationService) Retry() {
 	for _, item := range items {
 		if item.RetryCount >= s.retryMax {
 			s.removeRetry(item.MessageID)
-			s.runtimeManager.Delete(item.MessageID)
+			s.runtimeManager.Delete(item.ConversationID, item.MessageID)
 			continue
 		}
 
-		task, ok := s.runtimeManager.Get(item.MessageID)
+		task, ok := s.runtimeManager.Get(item.ConversationID, item.MessageID)
 		if !ok {
 			s.removeRetry(item.MessageID)
 			continue
@@ -649,7 +664,7 @@ func (s *GenerationService) Retry() {
 		if err != nil {
 			if !s.shouldRetry(err) {
 				s.removeRetry(item.MessageID)
-				s.runtimeManager.Delete(item.MessageID)
+				s.runtimeManager.Delete(item.ConversationID, item.MessageID)
 				continue
 			}
 
