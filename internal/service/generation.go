@@ -677,7 +677,7 @@ func (s *GenerationService) Retry() {
 		}
 
 		s.removeRetry(item.MessageID)
-		s.runtimeManager.Delete(item.MessageID)
+		s.runtimeManager.Delete(item.ConversationID, item.MessageID)
 	}
 }
 
