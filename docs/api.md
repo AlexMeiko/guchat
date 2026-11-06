@@ -1066,11 +1066,13 @@ Authorization: Bearer <access_token>
 
 ### 5.8 工作区
 
-工作区文件落在当前会话目录，不入库。路径参数 `:conversation_id` 必须属于当前用户。列表和上传仍只针对工作区根目录中的单层文件名；下载和删除接受容器内路径 `/workspace/...`，可含子目录。
+工作区文件落在当前会话目录，不入库。路径参数 `:conversation_id` 必须属于当前用户。列表和上传默认针对工作区根目录，也支持已存在的子目录（`path` 传 `/workspace/...`）；下载和删除接受容器内路径 `/workspace/...`，可含子目录。
 
 #### `GET /api/conversations/:conversation_id/files`
 
-列出当前会话工作区根目录。
+列出工作区目录。查询参数：
+
+- `path`：可选，容器内目录路径，如 `/workspace/sub`。缺省列根目录。
 
 成功响应：`200 OK`
 
@@ -1079,7 +1081,7 @@ Authorization: Bearer <access_token>
   "items": [
     {
       "name": "notes.txt",
-      "path": "/workspace/notes.txt",
+      "path": "/workspace/sub/notes.txt",
       "size_bytes": 12,
       "is_dir": false,
       "mod_time": "2026-09-03T02:00:00+08:00"
@@ -1088,12 +1090,15 @@ Authorization: Bearer <access_token>
 }
 ```
 
-`path` 是容器内路径，固定为 `/workspace/{name}`。
+`path` 是容器内路径，根目录下固定为 `/workspace/{name}`，子目录下为 `/workspace/{dir}/{name}`。
 
 常见失败：
 
 - `400 invalid conversation id`
+- `400 invalid file path`
+- `400 path is not a directory`
 - `404 conversation not found`
+- `404 directory not found`
 - `500 internal server error`
 
 #### `POST /api/conversations/:conversation_id/files`
@@ -1103,6 +1108,7 @@ Authorization: Bearer <access_token>
 字段：
 
 - `file`：必填，上传文件
+- `path`：可选，目标目录，如 `/workspace/sub`；缺省上传到根目录，且该目录必须已存在
 - `overwrite`：可选，字符串 `true` 时覆盖已存在的普通文件
 
 成功响应：`201 Created`
@@ -1110,7 +1116,7 @@ Authorization: Bearer <access_token>
 ```json
 {
   "name": "notes.txt",
-  "path": "/workspace/notes.txt",
+  "path": "/workspace/sub/notes.txt",
   "size_bytes": 12,
   "is_dir": false,
   "mod_time": "2026-09-03T02:00:00+08:00"
@@ -1122,8 +1128,10 @@ Authorization: Bearer <access_token>
 - `400 invalid conversation id`
 - `400 file is required`
 - `400 invalid file name`
+- `400 path is not a directory`
 - `400 cannot overwrite non-regular file`
 - `404 conversation not found`
+- `404 directory not found`
 - `409 file already exists`
 - `413 file too large`
 - `500 internal server error`
