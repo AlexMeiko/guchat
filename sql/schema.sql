@@ -52,6 +52,7 @@ CREATE TABLE messages
     created_at        TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     UNIQUE KEY uq_messages_conversation_seq (conversation_id, seq),
     KEY idx_messages_summary_anchor (conversation_id, has_summary, seq),
+    KEY idx_messages_conversation_status_seq (conversation_id, status, seq),
     CONSTRAINT fk_messages_conversation_id
         FOREIGN KEY (conversation_id) REFERENCES conversations (id)
             ON DELETE CASCADE

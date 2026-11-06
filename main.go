@@ -137,13 +137,13 @@ func main() {
 		log.Fatal(err)
 	}
 
+	runtimeManager := stream.NewManager()
+
 	memoryService := service.NewMemoryService(memoryStore, memoryRetriever, conversationRepo, memoryIndexer)
 	memoryHandler := handler.NewMemoryHandler(memoryService)
 
 	messageRepo := repository.NewMessageRepository(mysqlDB)
-	messageService := service.NewMessageService(conversationRepo, messageRepo)
-
-	runtimeManager := stream.NewManager()
+	messageService := service.NewMessageService(conversationRepo, messageRepo, runtimeManager)
 
 	toolCallRepo := repository.NewToolCallRepository(mysqlDB)
 	toolCallService := service.NewToolCallService(toolCallRepo)

@@ -13,6 +13,7 @@ const (
 	MessageStatusStreaming = "streaming"
 	MessageStatusDone      = "done"
 	MessageStatusFailed    = "failed"
+	MessageStatusQueued    = "queued"
 )
 
 type Message struct {

@@ -368,6 +368,8 @@ curl -N "http://localhost:8080/api/conversations/<conversation_id>/events" \
 - `message.completed`：生成完成
 - `message.failed`：生成失败
 
+assistant 生成通常按 `message.created`、`message.updated(status=streaming)`、快照或增量、终态事件的顺序到达。生成期间提交的多个 `queued` user 消息会合并到下一轮上下文，并只创建一个新的 assistant。
+
 ## 构建与部署
 
 直接构建当前平台：

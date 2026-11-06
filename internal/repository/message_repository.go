@@ -193,6 +193,47 @@ func (r *MessageRepository) GetNextSeqByConversationIDAndSeq(ctx context.Context
 	return seq, true, nil
 }
 
+func (r *MessageRepository) ListMessagesAfterSeq(
+	ctx context.Context,
+	conversationID string,
+	seq int,
+	statuses ...string,
+) ([]entity.Message, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(statuses)), ",")
+	query := `
+		SELECT *
+		FROM messages
+		WHERE conversation_id = ?
+		  AND role = ?
+		  AND status IN (` + placeholders + `)
+		  AND seq > ?
+		ORDER BY seq ASC
+	`
+
+	args := make([]any, 0, len(statuses)+3)
+	args = append(args, conversationID, entity.MessageRoleUser)
+	for _, status := range statuses {
+		args = append(args, status)
+	}
+	args = append(args, seq)
+
+	var messages []entity.Message
+	if err := r.db.SelectContext(
+		ctx,
+		&messages,
+		query,
+		args...,
+	); err != nil {
+		return nil, err
+	}
+
+	return messages, nil
+}
+
 func (r *MessageRepository) UpdateContentByIDAndConversationID(ctx context.Context, messageID, conversationID, content string) (bool, error) {
 	const query = `UPDATE messages SET content = ? WHERE id = ? AND conversation_id = ?`
 
@@ -333,6 +374,82 @@ func (r *MessageRepository) UpdateByIDAndConversationID(ctx context.Context, mes
 	}
 
 	return n > 0, nil
+}
+
+func (r *MessageRepository) PromotePendingMessageToQueued(
+	ctx context.Context,
+	conversationID, messageID string,
+) (bool, error) {
+	const query = `
+		UPDATE messages AS target
+		JOIN (
+			SELECT
+				conversation_id,
+				MAX(seq) + 1 AS next_seq
+			FROM messages
+			WHERE conversation_id = ?
+			  AND status IN (?, ?)
+			GROUP BY conversation_id
+		) AS position
+		  ON position.conversation_id = target.conversation_id
+		SET
+			target.status = ?,
+			target.seq = position.next_seq
+		WHERE target.id = ?
+		  AND target.conversation_id = ?
+		  AND target.role = ?
+		  AND target.status = ?
+	`
+
+	result, err := r.db.ExecContext(ctx, query,
+		conversationID,
+		entity.MessageStatusStreaming,
+		entity.MessageStatusQueued,
+		entity.MessageStatusQueued,
+		messageID,
+		conversationID,
+		entity.MessageRoleUser,
+		entity.MessageStatusPending,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func (r *MessageRepository) MarkMessagesDone(
+	ctx context.Context,
+	conversationID string,
+	messageIDs []string,
+) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(messageIDs)), ",")
+	args := make([]any, 0, len(messageIDs)+5)
+	args = append(args, entity.MessageStatusDone, conversationID, entity.MessageRoleUser)
+	for _, messageID := range messageIDs {
+		args = append(args, messageID)
+	}
+	args = append(args, entity.MessageStatusQueued, entity.MessageStatusPending)
+
+	query := `
+		UPDATE messages
+		SET status = ?
+		WHERE conversation_id = ?
+		  AND role = ?
+		  AND id IN (` + placeholders + `)
+		  AND status IN (?, ?)
+	`
+
+	_, err := r.db.ExecContext(ctx, query, args...)
+	return err
 }
 
 func (r *MessageRepository) FailUnfinishedMsg(ctx context.Context, errorMessage string) (int64, error) {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/AlexMeiko/guchat/internal/entity"
 	"github.com/AlexMeiko/guchat/internal/repository"
+	"github.com/AlexMeiko/guchat/internal/stream"
 	"github.com/google/uuid"
 )
 
@@ -58,15 +59,18 @@ type UpdateGeneratedMessageInput struct {
 type MessageService struct {
 	conversationRepo *repository.ConversationRepository
 	messageRepo      *repository.MessageRepository
+	runtimeManager   *stream.Manager
 }
 
 func NewMessageService(
 	conversationRepo *repository.ConversationRepository,
 	messageRepo *repository.MessageRepository,
+	runtimeManager *stream.Manager,
 ) *MessageService {
 	return &MessageService{
 		conversationRepo: conversationRepo,
 		messageRepo:      messageRepo,
+		runtimeManager:   runtimeManager,
 	}
 }
 
@@ -81,7 +85,11 @@ func (s *MessageService) CreateMessage(ctx context.Context, userID int64, input 
 	}
 
 	if input.Status == "" {
-		input.Status = "done"
+		if s.runtimeManager.Has(input.ConversationID) {
+			input.Status = entity.MessageStatusPending
+		} else {
+			input.Status = entity.MessageStatusDone
+		}
 	}
 
 	message := &entity.Message{
@@ -286,6 +294,49 @@ func (s *MessageService) DeleteByIDAndConversationID(ctx context.Context, userID
 	}
 
 	return s.conversationRepo.TouchByIDAndUserID(ctx, conversationID, userID)
+}
+
+func (s *MessageService) PromotePendingMessageToQueued(ctx context.Context, userID int64, conversationID, messageID string) (*entity.Message, error) {
+	if err := s.ensureConversationOwned(ctx, userID, conversationID); err != nil {
+		return nil, err
+	}
+
+	updated, err := s.messageRepo.PromotePendingMessageToQueued(ctx, conversationID, messageID)
+	if err != nil {
+		return nil, err
+	}
+	if !updated {
+		return nil, ErrMessageNotPending
+	}
+
+	return s.GetByIDAndConversationID(ctx, userID, conversationID, messageID)
+}
+
+func (s *MessageService) ListMessagesAfterSeq(
+	ctx context.Context,
+	userID int64,
+	conversationID string,
+	seq int,
+	statuses ...string,
+) ([]entity.Message, error) {
+	if err := s.ensureConversationOwned(ctx, userID, conversationID); err != nil {
+		return nil, err
+	}
+
+	return s.messageRepo.ListMessagesAfterSeq(ctx, conversationID, seq, statuses...)
+}
+
+func (s *MessageService) MarkMessagesDone(
+	ctx context.Context,
+	userID int64,
+	conversationID string,
+	messageIDs []string,
+) error {
+	if err := s.ensureConversationOwned(ctx, userID, conversationID); err != nil {
+		return err
+	}
+
+	return s.messageRepo.MarkMessagesDone(ctx, conversationID, messageIDs)
 }
 
 // 供generation使用

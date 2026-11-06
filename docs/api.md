@@ -29,7 +29,7 @@
 | 流式输出 | `text/event-stream` |
 | 用户角色 | `user`、`admin` |
 | 消息角色 | `system`、`user`、`assistant` |
-| 消息状态 | `pending`、`streaming`、`done`、`failed` |
+| 消息状态 | `pending`、`streaming`、`queued`、`done`、`failed` |
 | 模型 provider | `openai`、`openai_responses`、`fake` |
 | 工具模式 | `auto`、`none` |
 
@@ -616,7 +616,9 @@ Authorization: Bearer <access_token>
 说明：
 
 - 路径中的 `:message_id` 是源消息 ID
-- 成功后会新建一条 assistant 消息，并异步开始生成
+- 成功后会新建一条 assistant 消息并异步开始生成；assistant 的创建、状态和内容通过会话 SSE 推送
+- 如果会话已有生成任务，`:message_id` 必须指向当前会话中的 `pending` user 消息；该消息会被提升为 `queued`，并在当前生成的合适边界接入
+- 同一轮中已有的多个 `queued` user 消息会合并处理，只创建一条新的 assistant 消息；请求中的 `model_id` 和 `tool_mode` 不会改变当前生成任务
 - `tool_mode` 为可选字段，支持 `auto`、`none`；不传时默认为 `auto`
 - `tool_mode=auto` 时，生成器可使用内置工具和已配置的 MCP 工具；若已启用沙箱，还包括 `terminal_open` / `terminal_exec`
 - `tool_mode=none` 时，本次生成不向模型提供工具

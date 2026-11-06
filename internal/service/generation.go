@@ -18,6 +18,7 @@ var (
 	ErrModelDisabled          = errors.New("model disabled")
 	ErrGenerationInProgress   = errors.New("generation already in progress")
 	ErrGenerationTaskNotFound = errors.New("generation task not found")
+	ErrMessageNotPending      = errors.New("message is not pending")
 )
 
 const (
@@ -141,6 +142,26 @@ func (s *GenerationService) Create(
 		return err
 	}
 
+	if s.runtimeManager.Has(input.ConversationID) {
+		queuedMessage, err := s.messageService.PromotePendingMessageToQueued(
+			ctx,
+			userID,
+			input.ConversationID,
+			input.SourceMessageID,
+		)
+		if err != nil {
+			return err
+		}
+
+		s.runtimeManager.Signal(input.ConversationID)
+		s.runtimeManager.Publish(input.ConversationID, stream.Event{
+			Type:      stream.EventTypeMessageUpdated,
+			MessageID: queuedMessage.ID,
+			Message:   queuedMessage,
+		})
+		return nil
+	}
+
 	modelConfig, err := s.modelService.GetByID(ctx, input.ModelID)
 	if err != nil {
 		return err
@@ -148,9 +169,6 @@ func (s *GenerationService) Create(
 
 	if !modelConfig.IsEnabled {
 		return ErrModelDisabled
-	}
-	if s.runtimeManager.Has(input.ConversationID) {
-		return ErrGenerationInProgress
 	}
 
 	assistantMsg, err := s.messageService.CreateMessage(ctx, userID, CreateMessageInput{
@@ -195,6 +213,7 @@ func (s *GenerationService) Create(
 			input.ConversationID,
 			assistantMsg.ID,
 			sourceMessage.Seq,
+			assistantMsg.Seq,
 			input.ModelID,
 			input.ToolMode,
 		)
@@ -209,6 +228,7 @@ func (s *GenerationService) Process(
 	conversationID string,
 	assistantMessageID string,
 	sourceMessageSeq int,
+	assistantMessageSeq int,
 	modelID int64,
 	toolMode string,
 ) error {
@@ -396,171 +416,195 @@ func (s *GenerationService) Process(
 
 	generateMessages = s.assembler.Prefix(workingSummary, promptMemoryMessage, buffer)
 
-	if !task.Start() {
-		return fail(context.Canceled)
-	}
+	for {
+		if !task.Start() {
+			return fail(context.Canceled)
+		}
 
-	if err := s.messageService.UpdateGeneratedMessage(ctx, userID, UpdateGeneratedMessageInput{
-		ConversationID:   conversationID,
-		MessageID:        assistantMessageID,
-		Content:          "",
-		ReasoningContent: "",
-		Status:           entity.MessageStatusStreaming,
-		ErrorMessage:     "",
-	}); err != nil {
-		return fail(err)
-	}
-
-	streamingMessage, err := s.messageService.GetByIDAndConversationID(
-		ctx,
-		userID,
-		conversationID,
-		assistantMessageID,
-	)
-	if err != nil {
-		return fail(err)
-	}
-	s.runtimeManager.Publish(conversationID, stream.Event{
-		Type:      stream.EventTypeMessageUpdated,
-		MessageID: assistantMessageID,
-		Message:   streamingMessage,
-	})
-
-	var toolExchanges []ToolExchange
-	var generationRounds []GenerationRound
-	completed := false
-
-	for round := 1; round <= s.maxToolRounds; round++ {
-		var calls []ToolCall
-
-		snapshot := task.Snapshot()
-		contentStartOffset := len(snapshot.Content)
-		reasoningStartOffset := len(snapshot.ReasoningContent)
-
-		roundMessages := s.assembler.Round(generateMessages, GenerateMessage{
-			ID:               assistantMessageID,
-			Role:             entity.MessageRoleAssistant,
-			Content:          snapshot.Content,
-			ReasoningContent: snapshot.ReasoningContent,
-			ToolExchanges:    toolExchanges,
-			GenerationRounds: generationRounds,
-		})
-
-		err = generator.Generate(ctx, GenerateInput{
-			Model:    modelConfig,
-			Messages: roundMessages,
-			Tools:    tools,
-		}, GenerateCallbacks{
-			ContentDelta:   task.AppendContent,
-			ReasoningDelta: task.AppendReasoningContent,
-			ToolCallCreated: func(call ToolCall) {
-				calls = append(calls, call)
-			},
-		})
-		if err != nil {
+		if err := s.messageService.UpdateGeneratedMessage(ctx, userID, UpdateGeneratedMessageInput{
+			ConversationID:   conversationID,
+			MessageID:        assistantMessageID,
+			Content:          "",
+			ReasoningContent: "",
+			Status:           entity.MessageStatusStreaming,
+			ErrorMessage:     "",
+		}); err != nil {
 			return fail(err)
 		}
 
-		snapshot = task.Snapshot()
-		contentEndOffset := len(snapshot.Content)
-		reasoningEndOffset := len(snapshot.ReasoningContent)
-
-		if contentEndOffset > contentStartOffset || reasoningEndOffset > reasoningStartOffset || len(calls) > 0 {
-			roundRecord := &entity.GenerationRound{
-				ConversationID:       conversationID,
-				AssistantMessageID:   assistantMessageID,
-				Round:                round,
-				ContentStartOffset:   contentStartOffset,
-				ContentEndOffset:     contentEndOffset,
-				ReasoningStartOffset: reasoningStartOffset,
-				ReasoningEndOffset:   reasoningEndOffset,
-			}
-
-			if err := s.generationRoundRepo.Create(ctx, roundRecord); err != nil {
-				return fail(err)
-			}
-
-			generationRounds = append(generationRounds, GenerationRound{
-				Round:                roundRecord.Round,
-				ContentStartOffset:   roundRecord.ContentStartOffset,
-				ContentEndOffset:     roundRecord.ContentEndOffset,
-				ReasoningStartOffset: roundRecord.ReasoningStartOffset,
-				ReasoningEndOffset:   roundRecord.ReasoningEndOffset,
-			})
+		streamingMessage, err := s.messageService.GetByIDAndConversationID(
+			ctx,
+			userID,
+			conversationID,
+			assistantMessageID,
+		)
+		if err != nil {
+			return fail(err)
 		}
+		s.runtimeManager.Publish(conversationID, stream.Event{
+			Type:      stream.EventTypeMessageUpdated,
+			MessageID: assistantMessageID,
+			Message:   streamingMessage,
+		})
 
-		if len(calls) == 0 {
-			task.Done()
-			completed = true
-			break
-		}
+		var toolExchanges []ToolExchange
+		var generationRounds []GenerationRound
+		completed := false
+		var messages []entity.Message
 
-		for i, modelCall := range calls {
-			if modelCall.ID == "" {
-				modelCall.ID = newGeneratedToolCallID(assistantMessageID, round, i+1)
-			}
+		for round := 1; round <= s.maxToolRounds; round++ {
+			var calls []ToolCall
 
-			record := &entity.ToolCall{
-				ConversationID:     conversationID,
-				AssistantMessageID: assistantMessageID,
-				ProviderCallID:     modelCall.ID,
-				ToolName:           modelCall.Name,
-				ArgumentsJSON:      string(modelCall.Arguments),
-				ResultJSON:         "",
-				Status:             entity.ToolCallStatusPending,
-				ErrorMessage:       "",
-				Round:              round,
-				Seq:                i + 1,
-			}
+			snapshot := task.Snapshot()
+			contentStartOffset := len(snapshot.Content)
+			reasoningStartOffset := len(snapshot.ReasoningContent)
 
-			//在数据库创建工具调用记录
-			if err := s.toolCallRepo.Create(ctx, record); err != nil {
-				return fail(err)
-			}
-
-			task.AddToolCall(stream.ToolCallSnapshot{
-				ID:         record.ID,
-				ProviderID: record.ProviderCallID,
-				Name:       record.ToolName,
-				Arguments:  record.ArgumentsJSON,
-				Result:     record.ResultJSON,
-				Status:     record.Status,
-				Round:      record.Round,
-				Seq:        record.Seq,
+			roundMessages := s.assembler.Round(generateMessages, GenerateMessage{
+				ID:               assistantMessageID,
+				Role:             entity.MessageRoleAssistant,
+				Content:          snapshot.Content,
+				ReasoningContent: snapshot.ReasoningContent,
+				ToolExchanges:    toolExchanges,
+				GenerationRounds: generationRounds,
 			})
 
-			//添加占位符，保持文本和工具调用的顺序性方便前端展示
-			task.AppendContent("\n\n<!--tool_call:" + record.ProviderCallID + "-->\n\n")
-
-			err := s.toolCallRepo.MarkRunning(ctx, record.ID)
+			err = generator.Generate(ctx, GenerateInput{
+				Model:    modelConfig,
+				Messages: roundMessages,
+				Tools:    tools,
+			}, GenerateCallbacks{
+				ContentDelta:   task.AppendContent,
+				ReasoningDelta: task.AppendReasoningContent,
+				ToolCallCreated: func(call ToolCall) {
+					calls = append(calls, call)
+				},
+			})
 			if err != nil {
 				return fail(err)
 			}
-			task.UpdateToolCallRunning(record.ID)
 
-			toolResult, toolErr := s.toolProviderManager.CallTool(ctx, user, modelCall.Name, modelCall.Arguments)
+			snapshot = task.Snapshot()
+			contentEndOffset := len(snapshot.Content)
+			reasoningEndOffset := len(snapshot.ReasoningContent)
 
-			if toolErr != nil {
-				toolErrorMessage := toolErr.Error()
-				//工具执行失败
-				payload, marshalErr := json.Marshal(map[string]any{
-					"error": toolErrorMessage,
-				})
-				if marshalErr != nil {
-					return fail(errors.Join(toolErr, marshalErr))
+			if contentEndOffset > contentStartOffset || reasoningEndOffset > reasoningStartOffset || len(calls) > 0 {
+				roundRecord := &entity.GenerationRound{
+					ConversationID:       conversationID,
+					AssistantMessageID:   assistantMessageID,
+					Round:                round,
+					ContentStartOffset:   contentStartOffset,
+					ContentEndOffset:     contentEndOffset,
+					ReasoningStartOffset: reasoningStartOffset,
+					ReasoningEndOffset:   reasoningEndOffset,
 				}
 
-				markErr := s.toolCallRepo.MarkFailed(ctx, record.ID, string(payload), toolErrorMessage)
-				if markErr != nil {
-					return fail(errors.Join(toolErr, markErr))
+				if err := s.generationRoundRepo.Create(ctx, roundRecord); err != nil {
+					return fail(err)
 				}
-				task.UpdateToolCallFailed(record.ID, string(payload), toolErrorMessage)
 
-				viewed, viewErr := session.ViewResult(ctx, ToolResult{
-					ToolCallID: modelCall.ID,
-					Name:       modelCall.Name,
-					Result:     payload,
+				generationRounds = append(generationRounds, GenerationRound{
+					Round:                roundRecord.Round,
+					ContentStartOffset:   roundRecord.ContentStartOffset,
+					ContentEndOffset:     roundRecord.ContentEndOffset,
+					ReasoningStartOffset: roundRecord.ReasoningStartOffset,
+					ReasoningEndOffset:   roundRecord.ReasoningEndOffset,
 				})
+			}
+
+			if len(calls) == 0 {
+				task.Done()
+				completed = true
+				break
+			}
+
+			for i, modelCall := range calls {
+				if modelCall.ID == "" {
+					modelCall.ID = newGeneratedToolCallID(assistantMessageID, round, i+1)
+				}
+
+				record := &entity.ToolCall{
+					ConversationID:     conversationID,
+					AssistantMessageID: assistantMessageID,
+					ProviderCallID:     modelCall.ID,
+					ToolName:           modelCall.Name,
+					ArgumentsJSON:      string(modelCall.Arguments),
+					ResultJSON:         "",
+					Status:             entity.ToolCallStatusPending,
+					ErrorMessage:       "",
+					Round:              round,
+					Seq:                i + 1,
+				}
+
+				//在数据库创建工具调用记录
+				if err := s.toolCallRepo.Create(ctx, record); err != nil {
+					return fail(err)
+				}
+
+				task.AddToolCall(stream.ToolCallSnapshot{
+					ID:         record.ID,
+					ProviderID: record.ProviderCallID,
+					Name:       record.ToolName,
+					Arguments:  record.ArgumentsJSON,
+					Result:     record.ResultJSON,
+					Status:     record.Status,
+					Round:      record.Round,
+					Seq:        record.Seq,
+				})
+
+				//添加占位符，保持文本和工具调用的顺序性方便前端展示
+				task.AppendContent("\n\n<!--tool_call:" + record.ProviderCallID + "-->\n\n")
+
+				err := s.toolCallRepo.MarkRunning(ctx, record.ID)
+				if err != nil {
+					return fail(err)
+				}
+				task.UpdateToolCallRunning(record.ID)
+
+				toolResult, toolErr := s.toolProviderManager.CallTool(ctx, user, modelCall.Name, modelCall.Arguments)
+
+				if toolErr != nil {
+					toolErrorMessage := toolErr.Error()
+
+					//工具执行失败
+					payload, marshalErr := json.Marshal(map[string]any{
+						"error": toolErrorMessage,
+					})
+					if marshalErr != nil {
+						return fail(errors.Join(toolErr, marshalErr))
+					}
+
+					markErr := s.toolCallRepo.MarkFailed(ctx, record.ID, string(payload), toolErrorMessage)
+					if markErr != nil {
+						return fail(errors.Join(toolErr, markErr))
+					}
+					task.UpdateToolCallFailed(record.ID, string(payload), toolErrorMessage)
+
+					viewed, viewErr := session.ViewResult(ctx, ToolResult{
+						ToolCallID: modelCall.ID,
+						Name:       modelCall.Name,
+						Result:     payload,
+					})
+					if viewErr != nil {
+						return fail(viewErr)
+					}
+
+					toolExchanges = append(toolExchanges, ToolExchange{
+						Round:  round,
+						Seq:    i + 1,
+						Call:   modelCall,
+						Result: viewed,
+					})
+					continue
+				}
+
+				toolResult.ToolCallID = modelCall.ID
+
+				if err := s.toolCallRepo.MarkDone(ctx, record.ID, string(toolResult.Result)); err != nil {
+					return fail(err)
+				}
+				task.UpdateToolCallDone(record.ID, string(toolResult.Result))
+
+				viewed, viewErr := session.ViewResult(ctx, toolResult)
 				if viewErr != nil {
 					return fail(viewErr)
 				}
@@ -571,38 +615,133 @@ func (s *GenerationService) Process(
 					Call:   modelCall,
 					Result: viewed,
 				})
-				continue
 			}
 
-			toolResult.ToolCallID = modelCall.ID
+			if task.ConsumeSignal() {
+				messages, err = s.messageService.ListMessagesAfterSeq(
+					ctx,
+					userID,
+					conversationID,
+					assistantMessageSeq,
+					entity.MessageStatusQueued,
+				)
+				if err != nil {
+					return fail(err)
+				}
+				if len(messages) > 0 {
+					break
+				}
+			}
+		}
 
-			if err := s.toolCallRepo.MarkDone(ctx, record.ID, string(toolResult.Result)); err != nil {
+		if len(messages) == 0 {
+			if !completed {
+				return fail(errors.New("max tool rounds exceeded"))
+			}
+
+			messages, err = s.messageService.ListMessagesAfterSeq(
+				ctx,
+				userID,
+				conversationID,
+				assistantMessageSeq,
+				entity.MessageStatusQueued,
+				entity.MessageStatusPending,
+			)
+			if err != nil {
 				return fail(err)
 			}
-			task.UpdateToolCallDone(record.ID, string(toolResult.Result))
-
-			viewed, viewErr := session.ViewResult(ctx, toolResult)
-			if viewErr != nil {
-				return fail(viewErr)
+			if len(messages) == 0 && task.ConsumeSignal() {
+				messages, err = s.messageService.ListMessagesAfterSeq(
+					ctx,
+					userID,
+					conversationID,
+					assistantMessageSeq,
+					entity.MessageStatusQueued,
+					entity.MessageStatusPending,
+				)
+				if err != nil {
+					return fail(err)
+				}
+			}
+		}
+		if len(messages) > 0 {
+			nextTask, nextAssistant, snapshot, err := s.continueWithMessages(
+				ctx,
+				userID,
+				conversationID,
+				task,
+				assistantMessageID,
+				messages,
+			)
+			if err != nil {
+				return err
 			}
 
-			toolExchanges = append(toolExchanges, ToolExchange{
-				Round:  round,
-				Seq:    i + 1,
-				Call:   modelCall,
-				Result: viewed,
+			generateMessages = append(generateMessages, GenerateMessage{
+				ID:               assistantMessageID,
+				Role:             entity.MessageRoleAssistant,
+				Content:          snapshot.Content,
+				ReasoningContent: snapshot.ReasoningContent,
+				ToolExchanges:    toolExchanges,
+				GenerationRounds: generationRounds,
 			})
+			for i := range messages {
+				generateMessages = append(generateMessages, GenerateMessage{
+					ID:               messages[i].ID,
+					Role:             messages[i].Role,
+					Content:          messages[i].Content,
+					ReasoningContent: messages[i].ReasoningContent,
+				})
+			}
+
+			assistantMessageID = nextAssistant.ID
+			sourceMessageSeq = messages[len(messages)-1].Seq
+			assistantMessageSeq = nextAssistant.Seq
+			task = nextTask
+			continue
 		}
-	}
 
-	if !completed {
-		return fail(errors.New("max tool rounds exceeded"))
-	}
+		snapshot := task.Snapshot()
 
+		// 同样用 terminalCtx：取消可能刚好落在「模型已正常收尾」和这次写库之间，
+		// 那时 ctx 已被 cancel，用 ctx 会让这条 done/failed 落库静默失败。
+		if err := s.messageService.UpdateGeneratedMessage(terminalCtx, userID, UpdateGeneratedMessageInput{
+			ConversationID:   conversationID,
+			MessageID:        assistantMessageID,
+			Content:          snapshot.Content,
+			ReasoningContent: snapshot.ReasoningContent,
+			Status:           snapshot.Status,
+			ErrorMessage:     snapshot.ErrorMessage,
+		}); err != nil {
+			if s.shouldRetry(err) {
+				s.addRetry(userID, conversationID, assistantMessageID)
+			} else {
+				s.runtimeManager.Delete(conversationID, assistantMessageID)
+			}
+			return err
+		}
+
+		s.runtimeManager.Delete(conversationID, assistantMessageID)
+		return nil
+	}
+}
+
+func (s *GenerationService) continueWithMessages(
+	ctx context.Context,
+	userID int64,
+	conversationID string,
+	task *stream.Task,
+	assistantMessageID string,
+	messages []entity.Message,
+) (*stream.Task, *entity.Message, stream.Snapshot, error) {
+	terminalCtx := context.WithoutCancel(ctx)
+
+	task.Done()
 	snapshot := task.Snapshot()
+	if snapshot.Status != entity.MessageStatusDone {
+		return nil, nil, stream.Snapshot{}, context.Canceled
+	}
 
-	// 同样用 terminalCtx：取消可能刚好落在「模型已正常收尾」和这次写库之间，
-	// 那时 ctx 已被 cancel，用 ctx 会让这条 done/failed 落库静默失败。
 	if err := s.messageService.UpdateGeneratedMessage(terminalCtx, userID, UpdateGeneratedMessageInput{
 		ConversationID:   conversationID,
 		MessageID:        assistantMessageID,
@@ -616,11 +755,57 @@ func (s *GenerationService) Process(
 		} else {
 			s.runtimeManager.Delete(conversationID, assistantMessageID)
 		}
-		return err
+		return nil, nil, stream.Snapshot{}, err
 	}
 
-	s.runtimeManager.Delete(conversationID, assistantMessageID)
-	return nil
+	nextAssistant, err := s.messageService.CreateMessage(ctx, userID, CreateMessageInput{
+		ConversationID: conversationID,
+		Role:           entity.MessageRoleAssistant,
+		Status:         entity.MessageStatusPending,
+		PrevID:         messages[len(messages)-1].ID,
+	})
+	if err != nil {
+		s.runtimeManager.Delete(conversationID, assistantMessageID)
+		return nil, nil, stream.Snapshot{}, err
+	}
+
+	messageIDs := make([]string, len(messages))
+	for i := range messages {
+		messageIDs[i] = messages[i].ID
+	}
+	if err := s.messageService.MarkMessagesDone(ctx, userID, conversationID, messageIDs); err != nil {
+		_ = s.messageService.DeleteByIDAndConversationID(terminalCtx, userID, conversationID, nextAssistant.ID)
+		s.runtimeManager.Delete(conversationID, assistantMessageID)
+		return nil, nil, stream.Snapshot{}, err
+	}
+
+	nextTask, ok := s.runtimeManager.Switch(conversationID, assistantMessageID, nextAssistant.ID)
+	if !ok {
+		_ = s.messageService.DeleteByIDAndConversationID(terminalCtx, userID, conversationID, nextAssistant.ID)
+		return nil, nil, stream.Snapshot{}, ErrGenerationInProgress
+	}
+
+	s.runtimeManager.Publish(conversationID, stream.Event{
+		Type:      stream.EventTypeGenerationCompleted,
+		MessageID: assistantMessageID,
+		Task:      task,
+	})
+	for i := range messages {
+		messages[i].Status = entity.MessageStatusDone
+		s.runtimeManager.Publish(conversationID, stream.Event{
+			Type:      stream.EventTypeMessageUpdated,
+			MessageID: messages[i].ID,
+			Message:   &messages[i],
+		})
+	}
+	s.runtimeManager.Publish(conversationID, stream.Event{
+		Type:      stream.EventTypeMessageCreated,
+		MessageID: nextAssistant.ID,
+		Message:   nextAssistant,
+		Task:      nextTask,
+	})
+
+	return nextTask, nextAssistant, snapshot, nil
 }
 
 func (s *GenerationService) RetryLoop(ctx context.Context) {

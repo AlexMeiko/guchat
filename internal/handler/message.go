@@ -150,7 +150,6 @@ func (h *MessageHandler) Create(c *gin.Context) {
 		Role:             "user",
 		Content:          req.Content,
 		ReasoningContent: "",
-		Status:           "done",
 		ErrorMessage:     "",
 		PrevID:           req.PrevID,
 	})

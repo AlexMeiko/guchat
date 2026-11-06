@@ -38,6 +38,7 @@ type Task struct {
 	toolCalls        []ToolCallSnapshot
 	errorMessage     string
 	cancel           context.CancelFunc
+	hasSignal        bool
 }
 
 func NewTask(messageID string, cancel context.CancelFunc) *Task {
@@ -102,6 +103,25 @@ func (t *Task) Failed(errMsg string) {
 
 	t.status = entity.MessageStatusFailed
 	t.errorMessage = errMsg
+}
+
+func (t *Task) Signal() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.hasSignal = true
+}
+
+func (t *Task) ConsumeSignal() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if !t.hasSignal {
+		return false
+	}
+
+	t.hasSignal = false
+	return true
 }
 
 func (t *Task) AppendContent(delta string) {
@@ -217,6 +237,19 @@ func (m *Manager) Has(conversationID string) bool {
 	return ok
 }
 
+func (m *Manager) Signal(conversationID string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	task, ok := m.tasks[conversationID]
+	if !ok {
+		return false
+	}
+
+	task.Signal()
+	return true
+}
+
 func (m *Manager) Create(conversationID, messageID string, cancel context.CancelFunc) *Task {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -227,6 +260,24 @@ func (m *Manager) Create(conversationID, messageID string, cancel context.Cancel
 
 	m.tasks[conversationID] = NewTask(messageID, cancel)
 	return m.tasks[conversationID]
+}
+
+func (m *Manager) Switch(conversationID, messageID, nextMessageID string) (*Task, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	current, ok := m.tasks[conversationID]
+	if !ok || current.messageID != messageID {
+		return nil, false
+	}
+
+	current.mu.RLock()
+	next := NewTask(nextMessageID, current.cancel)
+	next.hasSignal = current.hasSignal
+	current.mu.RUnlock()
+
+	m.tasks[conversationID] = next
+	return next, true
 }
 
 func (m *Manager) Get(conversationID, messageID string) (*Task, bool) {

@@ -145,6 +145,11 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 			return
 		}
 
+		if errors.Is(err, service.ErrMessageNotPending) {
+			c.JSON(http.StatusConflict, model.ErrorResponse{Error: "message is not pending"})
+			return
+		}
+
 		if errors.Is(err, service.ErrModelNotFound) {
 			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "model not found"})
 			return
