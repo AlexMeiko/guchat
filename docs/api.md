@@ -158,7 +158,7 @@ Authorization: Bearer <access_token>
 | 消息 | DELETE | `/api/conversations/:conversation_id/messages/:message_id` | Yes | user/admin |
 | 生成 | POST | `/api/conversations/:conversation_id/messages/:message_id/generation` | Yes | user/admin |
 | 生成 | POST | `/api/conversations/:conversation_id/messages/:message_id/generation/cancel` | Yes | user/admin |
-| 生成 | GET | `/api/conversations/:conversation_id/messages/:message_id/events` | Yes | user/admin |
+| 生成 | GET | `/api/conversations/:conversation_id/events` | Yes | user/admin |
 | 记忆 | GET | `/api/memory` | Yes | user/admin |
 | 记忆 | PATCH | `/api/memory/:id/status` | Yes | user/admin |
 | 记忆 | DELETE | `/api/memory/:id` | Yes | user/admin |
@@ -634,20 +634,8 @@ Authorization: Bearer <access_token>
 }
 ```
 
-成功响应：`201 Created`
-
-```json
-{
-  "id": "assistant-message-uuid",
-  "conversation_id": "uuid",
-  "role": "assistant",
-  "content": "",
-  "reasoning_content": "",
-  "status": "pending",
-  "error_message": "",
-  "created_at": "2026-03-20T18:00:00.000+08:00"
-}
-```
+成功响应：`202 Accepted`，无响应体。客户端通过
+`GET /api/conversations/:conversation_id/events` 接收新建 assistant 消息及后续生成事件。
 
 常见失败：
 
@@ -659,24 +647,24 @@ Authorization: Bearer <access_token>
 - `404 message not found`
 - `404 model not found`
 - `409 model is disabled`
+- `409 message is not pending`
 - `409 message position conflict`
 - `500 internal server error`
 
-#### `GET /api/conversations/:conversation_id/messages/:message_id/events`
+#### `GET /api/conversations/:conversation_id/events`
 
 说明：
 
-- 用于订阅指定 assistant 消息的流式事件
-- 如果对应 runtime task 不存在，会立即返回一条 `message.snapshot` 后结束连接
-- 如果消息在建立连接时已经是 `done` 或 `failed`，也只会返回一条 `message.snapshot`
+- 用于订阅整个会话的消息和生成事件，应在提交生成前建立连接
+- 连接会持续接收消息创建、编辑、删除和生成进度事件
+- 建立连接时如果会话已有生成任务，会先发送该任务的 `message.snapshot`
+- 新 assistant 通常先通过 `message.created` 以 `pending` 状态到达，开始生成后通过 `message.updated` 更新为 `streaming`
+- 断线重连后通过消息列表接口和当前任务快照恢复状态
 
 常见失败：
 
 - `400 invalid conversation id`
-- `400 invalid message id`
 - `404 conversation not found`
-- `404 message not found`
-- `500 internal server error`
 - `500 streaming unsupported`
 
 #### `POST /api/conversations/:conversation_id/messages/:message_id/generation/cancel`
@@ -1181,7 +1169,7 @@ Authorization: Bearer <access_token>
 
 接口：
 
-`GET /api/conversations/:conversation_id/messages/:message_id/events`
+`GET /api/conversations/:conversation_id/events`
 
 响应头：
 
@@ -1200,6 +1188,9 @@ data: <json>
 
 事件类型：
 
+- `message.created`
+- `message.updated`
+- `message.deleted`
 - `message.snapshot`
 - `message.delta`
 - `message.reasoning_delta`
@@ -1207,6 +1198,30 @@ data: <json>
 - `tool_call.updated`
 - `message.completed`
 - `message.failed`
+
+`message.created` 和 `message.updated` 的 `data` 是消息对象，字段与普通消息接口响应一致：
+
+```json
+{
+  "id": "uuid",
+  "conversation_id": "uuid",
+  "role": "assistant",
+  "content": "",
+  "reasoning_content": "",
+  "status": "streaming",
+  "error_message": "",
+  "seq": 2048,
+  "created_at": "2026-03-20T18:00:01.000+08:00"
+}
+```
+
+`message.created` 通常表示新消息，生成中的 assistant 初始状态为 `pending`；`message.updated` 表示消息编辑、user 消息进入 `queued` 或 assistant 开始 `streaming`。`message.deleted` 的 `data` 格式为：
+
+```json
+{
+  "message_id": "uuid"
+}
+```
 
 ### 6.1 `message.snapshot`
 
@@ -1235,9 +1250,8 @@ data: <json>
 
 说明：
 
-- 建立连接后总会先收到一条 `message.snapshot`
-- 如果对应 runtime task 不存在，接口只会返回这一条 `snapshot`，然后结束连接
-- 如果消息在连接建立时已经是 `done` 或 `failed`，也只会返回这一条 `snapshot`，然后结束连接
+- 如果会话连接建立时已有生成任务，会先收到该任务的一条 `message.snapshot`
+- 连接会在当前任务结束后继续保持，用于接收同一会话的后续事件
 - `tool_calls` 仅在该 assistant 消息已有工具调用记录时返回
 
 ### 6.2 `message.delta`
@@ -1291,6 +1305,7 @@ data: <json>
 ```json
 {
   "id": 1,
+  "message_id": "uuid",
   "provider_id": "call_xxx",
   "name": "tavily.tavily_extract",
   "arguments": "{\"url\":\"https://example.com\"}",
@@ -1314,6 +1329,7 @@ data: <json>
 ```json
 {
   "id": 1,
+  "message_id": "uuid",
   "provider_id": "call_xxx",
   "name": "tavily.tavily_extract",
   "arguments": "{\"url\":\"https://example.com\"}",
@@ -1818,7 +1834,7 @@ curl -X POST "http://localhost:8080/api/admin/models" \
 ### 10.7 订阅 SSE
 
 ```bash
-curl -N "http://localhost:8080/api/conversations/<conversation_id>/messages/<assistant_message_id>/events" \
+curl -N "http://localhost:8080/api/conversations/<conversation_id>/events" \
   -H "Authorization: Bearer <access_token>"
 ```
 

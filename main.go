@@ -214,7 +214,7 @@ func main() {
 		time.Duration(cfg.GenerationRetryInterval)*time.Second,
 		int(cfg.GenerationRetryMax),
 	)
-	generationHandler := handler.NewGenerationHandler(generationService, conversationService, messageService, toolCallService, runtimeManager)
+	generationHandler := handler.NewGenerationHandler(generationService, conversationService, runtimeManager)
 
 	go generationService.RetryLoop(context.Background())
 

@@ -130,7 +130,7 @@ func (s *GenerationService) Create(
 	ctx context.Context,
 	userID int64,
 	input CreateGenerationInput,
-) (*entity.Message, error) {
+) error {
 	sourceMessage, err := s.messageService.GetByIDAndConversationID(
 		ctx,
 		userID,
@@ -138,19 +138,19 @@ func (s *GenerationService) Create(
 		input.SourceMessageID,
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	modelConfig, err := s.modelService.GetByID(ctx, input.ModelID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if !modelConfig.IsEnabled {
-		return nil, ErrModelDisabled
+		return ErrModelDisabled
 	}
 	if s.runtimeManager.Has(input.ConversationID) {
-		return nil, ErrGenerationInProgress
+		return ErrGenerationInProgress
 	}
 
 	assistantMsg, err := s.messageService.CreateMessage(ctx, userID, CreateMessageInput{
@@ -163,11 +163,12 @@ func (s *GenerationService) Create(
 		PrevID:           input.SourceMessageID,
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	processCtx, cancel := context.WithCancel(context.Background())
-	if s.runtimeManager.Create(assistantMsg.ConversationID, assistantMsg.ID, cancel) == nil {
+	task := s.runtimeManager.Create(assistantMsg.ConversationID, assistantMsg.ID, cancel)
+	if task == nil {
 		cancel()
 		if err := s.messageService.DeleteByIDAndConversationID(
 			ctx,
@@ -175,10 +176,17 @@ func (s *GenerationService) Create(
 			input.ConversationID,
 			assistantMsg.ID,
 		); err != nil {
-			return nil, err
+			return err
 		}
-		return nil, ErrGenerationInProgress
+		return ErrGenerationInProgress
 	}
+
+	s.runtimeManager.Publish(input.ConversationID, stream.Event{
+		Type:      stream.EventTypeMessageCreated,
+		MessageID: assistantMsg.ID,
+		Message:   assistantMsg,
+		Task:      task,
+	})
 
 	go func() {
 		_ = s.Process(
@@ -192,7 +200,7 @@ func (s *GenerationService) Create(
 		)
 	}()
 
-	return assistantMsg, nil
+	return nil
 }
 
 func (s *GenerationService) Process(
@@ -402,6 +410,21 @@ func (s *GenerationService) Process(
 	}); err != nil {
 		return fail(err)
 	}
+
+	streamingMessage, err := s.messageService.GetByIDAndConversationID(
+		ctx,
+		userID,
+		conversationID,
+		assistantMessageID,
+	)
+	if err != nil {
+		return fail(err)
+	}
+	s.runtimeManager.Publish(conversationID, stream.Event{
+		Type:      stream.EventTypeMessageUpdated,
+		MessageID: assistantMessageID,
+		Message:   streamingMessage,
+	})
 
 	var toolExchanges []ToolExchange
 	var generationRounds []GenerationRound

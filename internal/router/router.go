@@ -49,7 +49,7 @@ func New(
 
 			conversation.POST("/:conversation_id/messages/:message_id/generation", generationHandler.Create)
 			conversation.POST("/:conversation_id/messages/:message_id/generation/cancel", generationHandler.Cancel)
-			conversation.GET("/:conversation_id/messages/:message_id/events", generationHandler.Events)
+			conversation.GET("/:conversation_id/events", generationHandler.ConversationEvents)
 
 			conversation.POST("/:conversation_id/files", workspaceHandler.Upload)
 			conversation.GET("/:conversation_id/files", workspaceHandler.List)

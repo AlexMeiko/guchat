@@ -20,6 +20,7 @@ type MessageResponse struct {
 	ToolCalls        []ToolCallEvent `json:"tool_calls,omitempty"`
 	Status           string          `json:"status"`
 	ErrorMessage     string          `json:"error_message"`
+	Seq              int             `json:"seq"`
 	CreatedAt        time.Time       `json:"created_at"`
 }
 

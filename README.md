@@ -185,7 +185,7 @@ Authorization: Bearer <access_token>
 | 消息 | `DELETE /api/conversations/:conversation_id/messages/:message_id` | 删除消息 |
 | 生成 | `POST /api/conversations/:conversation_id/messages/:message_id/generation` | 触发 AI 回复生成 |
 | 生成 | `POST /api/conversations/:conversation_id/messages/:message_id/generation/cancel` | 中止进行中的生成 |
-| 生成 | `GET /api/conversations/:conversation_id/messages/:message_id/events` | 订阅 SSE 事件 |
+| 生成 | `GET /api/conversations/:conversation_id/events` | 订阅会话 SSE 事件 |
 | 记忆 | `GET /api/memory` | 获取当前用户可管理的私有记忆 |
 | 记忆 | `PATCH /api/memory/:id/status` | 更新记忆状态 |
 | 记忆 | `DELETE /api/memory/:id` | 删除记忆 |
@@ -348,15 +348,18 @@ MCP_SERVERS=[{"name":"github","transport":"stdio","command":"npx","args":["-y","
 
 ## SSE 事件
 
-生成接口会创建 assistant 消息，客户端可订阅该消息的事件流：
+生成接口异步创建 assistant 消息，客户端应订阅会话事件流：
 
 ```bash
-curl -N "http://localhost:8080/api/conversations/<conversation_id>/messages/<assistant_message_id>/events" \
+curl -N "http://localhost:8080/api/conversations/<conversation_id>/events" \
   -H "Authorization: Bearer <access_token>"
 ```
 
 主要事件：
 
+- `message.created`：消息创建
+- `message.updated`：消息状态或正文更新；assistant 开始生成时会从 `pending` 更新为 `streaming`
+- `message.deleted`：消息删除
 - `message.snapshot`：当前消息快照
 - `message.delta`：正文增量
 - `message.reasoning_delta`：推理内容增量

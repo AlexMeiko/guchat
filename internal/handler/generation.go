@@ -17,8 +17,6 @@ import (
 type GenerationHandler struct {
 	generationService   *service.GenerationService
 	conversationService *service.ConversationService
-	messageService      *service.MessageService
-	toolCallService     *service.ToolCallService
 	runtimeManager      *stream.Manager
 }
 
@@ -35,15 +33,11 @@ const (
 func NewGenerationHandler(
 	generationService *service.GenerationService,
 	conversationService *service.ConversationService,
-	messageService *service.MessageService,
-	toolCallService *service.ToolCallService,
 	runtimeManager *stream.Manager,
 ) *GenerationHandler {
 	return &GenerationHandler{
 		generationService:   generationService,
 		conversationService: conversationService,
-		messageService:      messageService,
-		toolCallService:     toolCallService,
 		runtimeManager:      runtimeManager,
 	}
 }
@@ -134,7 +128,7 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 		return
 	}
 
-	message, err := h.generationService.Create(c.Request.Context(), user.UserID, service.CreateGenerationInput{
+	err := h.generationService.Create(c.Request.Context(), user.UserID, service.CreateGenerationInput{
 		ConversationID:  conversationID,
 		SourceMessageID: messageID,
 		ModelID:         req.ModelID,
@@ -175,19 +169,13 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, newMessageResponse(message, nil))
+	c.Status(http.StatusAccepted)
 }
 
-func (h *GenerationHandler) Events(c *gin.Context) {
+func (h *GenerationHandler) ConversationEvents(c *gin.Context) {
 	conversationID := c.Param("conversation_id")
 	if _, err := uuid.Parse(conversationID); err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid conversation id"})
-		return
-	}
-
-	messageID := c.Param("message_id")
-	if _, err := uuid.Parse(messageID); err != nil {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: "invalid message id"})
 		return
 	}
 
@@ -196,19 +184,9 @@ func (h *GenerationHandler) Events(c *gin.Context) {
 		return
 	}
 
-	message, err := h.messageService.GetByIDAndConversationID(
-		c.Request.Context(),
-		user.UserID,
-		conversationID,
-		messageID,
-	)
-	if err != nil {
+	if _, err := h.conversationService.Get(c.Request.Context(), user.UserID, conversationID); err != nil {
 		if errors.Is(err, service.ErrConversationNotFound) {
 			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "conversation not found"})
-			return
-		}
-		if errors.Is(err, service.ErrMessageNotFound) {
-			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: "message not found"})
 			return
 		}
 
@@ -226,115 +204,216 @@ func (h *GenerationHandler) Events(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
-	task, exists := h.runtimeManager.Get(message.ConversationID, message.ID)
-	if !exists {
-		toolCalls, err := h.toolCallService.ListByAssistantMessageID(c.Request.Context(), message.ID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: "internal server error"})
-			return
+	current, events, unsubscribe := h.runtimeManager.Subscribe(conversationID)
+	defer unsubscribe()
+
+	var task *stream.Task
+	var taskTicker *time.Ticker
+	var taskTick <-chan time.Time
+	var sentContentOffset int
+	var sentReasoningOffset int
+	var sentToolCalls map[int64]stream.ToolCallSnapshot
+
+	stopTask := func() {
+		if taskTicker != nil {
+			taskTicker.Stop()
+			taskTicker = nil
+			taskTick = nil
+		}
+		task = nil
+	}
+
+	startTask := func(next *stream.Task) error {
+		if next == nil {
+			return nil
 		}
 
-		_ = writeSSE(c, generationEventSnapshot, newGenerationSnapshotEvent(
-			message.ID,
-			message.Status,
-			message.Content,
-			message.ReasoningContent,
-			message.ErrorMessage,
-			newToolCallSnapshots(toolCalls),
-		))
-		return
+		stopTask()
+		task = next
+		snapshot := task.Snapshot()
+		sentContentOffset = len(snapshot.Content)
+		sentReasoningOffset = len(snapshot.ReasoningContent)
+		sentToolCalls = indexToolCalls(snapshot.ToolCalls)
+
+		if err := writeSSE(c, generationEventSnapshot, newGenerationSnapshotEvent(
+			snapshot.MessageID,
+			snapshot.Status,
+			snapshot.Content,
+			snapshot.ReasoningContent,
+			snapshot.ErrorMessage,
+			snapshot.ToolCalls,
+		)); err != nil {
+			return err
+		}
+
+		if snapshot.Status == entity.MessageStatusDone || snapshot.Status == entity.MessageStatusFailed {
+			stopTask()
+			return nil
+		}
+
+		taskTicker = time.NewTicker(100 * time.Millisecond)
+		taskTick = taskTicker.C
+		return nil
 	}
 
-	snapshot := task.Snapshot()
-	if err := writeSSE(c, generationEventSnapshot, newGenerationSnapshotEvent(
-		snapshot.MessageID,
-		snapshot.Status,
-		snapshot.Content,
-		snapshot.ReasoningContent,
-		snapshot.ErrorMessage,
-		snapshot.ToolCalls,
-	)); err != nil {
+	if err := startTask(current); err != nil {
 		return
 	}
+	c.Writer.Flush()
 
-	if snapshot.Status == entity.MessageStatusDone || snapshot.Status == entity.MessageStatusFailed {
-		return
-	}
-
-	sentContentOffset := len(snapshot.Content)
-	sentReasoningOffset := len(snapshot.ReasoningContent)
-	sentToolCalls := indexToolCalls(snapshot.ToolCalls)
-
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
 
 	for {
 		select {
 		case <-c.Request.Context().Done():
 			return
 
-		case <-ticker.C:
-			snapshot = task.Snapshot()
-
-			// 检查文本是否有增量
-			if len(snapshot.Content) > sentContentOffset {
-				delta := snapshot.Content[sentContentOffset:]
-				if err := writeSSE(c, generationEventDelta, newGenerationDeltaEvent(snapshot.MessageID, delta)); err != nil {
-					return
-				}
-				sentContentOffset = len(snapshot.Content)
+		case event, ok := <-events:
+			if !ok {
+				return
 			}
 
-			if len(snapshot.ReasoningContent) > sentReasoningOffset {
-				delta := snapshot.ReasoningContent[sentReasoningOffset:]
-				if err := writeSSE(c, generationEventReasoningDelta, newGenerationDeltaEvent(snapshot.MessageID, delta)); err != nil {
-					return
-				}
-				sentReasoningOffset = len(snapshot.ReasoningContent)
-			}
-
-			//检查tool call状态是否有更新
-			for _, call := range snapshot.ToolCalls {
-				previous, exists := sentToolCalls[call.ID]
-				if !exists {
-					if err := writeSSE(c, generationEventToolCallCreated, newToolCallEvent(call)); err != nil {
+			switch event.Type {
+			case stream.EventTypeMessageCreated:
+				if event.Message != nil {
+					if err := writeSSE(c, string(event.Type), newMessageResponse(event.Message, nil)); err != nil {
 						return
 					}
-					sentToolCalls[call.ID] = call
+				}
+				if err := startTask(event.Task); err != nil {
+					return
+				}
+
+			case stream.EventTypeMessageUpdated:
+				if event.Message == nil {
 					continue
 				}
+				if err := writeSSE(c, string(event.Type), newMessageResponse(event.Message, nil)); err != nil {
+					return
+				}
 
-				if previous.Status != call.Status ||
-					previous.Result != call.Result ||
-					previous.ErrorMessage != call.ErrorMessage {
-					if err := writeSSE(c, generationEventToolCallUpdated, newToolCallEvent(call)); err != nil {
-						return
-					}
-					sentToolCalls[call.ID] = call
+			case stream.EventTypeMessageDeleted:
+				if err := writeSSE(c, string(event.Type), map[string]string{
+					"message_id": event.MessageID,
+				}); err != nil {
+					return
+				}
+				if task != nil && task.Snapshot().MessageID == event.MessageID {
+					stopTask()
+				}
+
+			case stream.EventTypeGenerationCompleted:
+				if task != event.Task {
+					continue
+				}
+				finished, err := writeTaskProgress(
+					c,
+					task,
+					&sentContentOffset,
+					&sentReasoningOffset,
+					sentToolCalls,
+				)
+				if err != nil {
+					return
+				}
+				if finished {
+					stopTask()
 				}
 			}
 
-			switch snapshot.Status {
-			case entity.MessageStatusDone:
-				_ = writeSSE(c, generationEventCompleted, newGenerationCompletedEvent(
-					snapshot.MessageID,
-					len(snapshot.Content),
-					len(snapshot.ReasoningContent),
-				))
-				return
+		case <-taskTick:
+			if task == nil {
+				continue
+			}
 
-			case entity.MessageStatusFailed:
-				_ = writeSSE(c, generationEventFailed, newGenerationFailedEvent(
-					snapshot.MessageID,
-					snapshot.ErrorMessage,
-					len(snapshot.Content),
-					len(snapshot.ReasoningContent),
-				))
+			finished, err := writeTaskProgress(
+				c,
+				task,
+				&sentContentOffset,
+				&sentReasoningOffset,
+				sentToolCalls,
+			)
+			if err != nil {
+				return
+			}
+			if finished {
+				stopTask()
+			}
+
+		case <-heartbeat.C:
+			if err := writeSSEComment(c); err != nil {
 				return
 			}
 		}
 	}
+}
 
+func writeTaskProgress(
+	c *gin.Context,
+	task *stream.Task,
+	sentContentOffset, sentReasoningOffset *int,
+	sentToolCalls map[int64]stream.ToolCallSnapshot,
+) (bool, error) {
+	snapshot := task.Snapshot()
+
+	if len(snapshot.Content) > *sentContentOffset {
+		if err := writeSSE(c, generationEventDelta, newGenerationDeltaEvent(
+			snapshot.MessageID,
+			snapshot.Content[*sentContentOffset:],
+		)); err != nil {
+			return false, err
+		}
+		*sentContentOffset = len(snapshot.Content)
+	}
+
+	if len(snapshot.ReasoningContent) > *sentReasoningOffset {
+		if err := writeSSE(c, generationEventReasoningDelta, newGenerationDeltaEvent(
+			snapshot.MessageID,
+			snapshot.ReasoningContent[*sentReasoningOffset:],
+		)); err != nil {
+			return false, err
+		}
+		*sentReasoningOffset = len(snapshot.ReasoningContent)
+	}
+
+	for _, call := range snapshot.ToolCalls {
+		previous, exists := sentToolCalls[call.ID]
+		if !exists {
+			if err := writeSSE(c, generationEventToolCallCreated, newToolCallEvent(snapshot.MessageID, call)); err != nil {
+				return false, err
+			}
+			sentToolCalls[call.ID] = call
+			continue
+		}
+
+		if previous.Status != call.Status ||
+			previous.Result != call.Result ||
+			previous.ErrorMessage != call.ErrorMessage {
+			if err := writeSSE(c, generationEventToolCallUpdated, newToolCallEvent(snapshot.MessageID, call)); err != nil {
+				return false, err
+			}
+			sentToolCalls[call.ID] = call
+		}
+	}
+
+	switch snapshot.Status {
+	case entity.MessageStatusDone:
+		return true, writeSSE(c, generationEventCompleted, newGenerationCompletedEvent(
+			snapshot.MessageID,
+			len(snapshot.Content),
+			len(snapshot.ReasoningContent),
+		))
+	case entity.MessageStatusFailed:
+		return true, writeSSE(c, generationEventFailed, newGenerationFailedEvent(
+			snapshot.MessageID,
+			snapshot.ErrorMessage,
+			len(snapshot.Content),
+			len(snapshot.ReasoningContent),
+		))
+	default:
+		return false, nil
+	}
 }
 
 func newGenerationSnapshotEvent(
@@ -346,42 +425,19 @@ func newGenerationSnapshotEvent(
 		Status:           status,
 		Content:          content,
 		ReasoningContent: reasoningContent,
-		ToolCalls:        newToolCallEvents(toolCalls),
+		ToolCalls:        newToolCallEvents(messageID, toolCalls),
 		Error:            errMsg,
 	}
 }
 
-func newToolCallSnapshots(toolCalls []entity.ToolCall) []stream.ToolCallSnapshot {
-	if len(toolCalls) == 0 {
-		return nil
-	}
-
-	result := make([]stream.ToolCallSnapshot, len(toolCalls))
-	for i, call := range toolCalls {
-		result[i] = stream.ToolCallSnapshot{
-			ID:           call.ID,
-			ProviderID:   call.ProviderCallID,
-			Name:         call.ToolName,
-			Arguments:    call.ArgumentsJSON,
-			Result:       call.ResultJSON,
-			Status:       call.Status,
-			ErrorMessage: call.ErrorMessage,
-			Round:        call.Round,
-			Seq:          call.Seq,
-		}
-	}
-
-	return result
-}
-
-func newToolCallEvents(toolCalls []stream.ToolCallSnapshot) []model.ToolCallEvent {
+func newToolCallEvents(messageID string, toolCalls []stream.ToolCallSnapshot) []model.ToolCallEvent {
 	if len(toolCalls) == 0 {
 		return nil
 	}
 
 	result := make([]model.ToolCallEvent, len(toolCalls))
 	for i, call := range toolCalls {
-		result[i] = newToolCallEvent(call)
+		result[i] = newToolCallEvent(messageID, call)
 	}
 
 	return result
@@ -430,6 +486,14 @@ func writeSSE(c *gin.Context, event string, data any) error {
 	return nil
 }
 
+func writeSSEComment(c *gin.Context) error {
+	if _, err := c.Writer.Write([]byte(": ping\n\n")); err != nil {
+		return err
+	}
+	c.Writer.Flush()
+	return nil
+}
+
 // 把toolCalls切片转换为以toolCall ID为key的map
 func indexToolCalls(toolCalls []stream.ToolCallSnapshot) map[int64]stream.ToolCallSnapshot {
 	result := make(map[int64]stream.ToolCallSnapshot, len(toolCalls))
@@ -439,9 +503,10 @@ func indexToolCalls(toolCalls []stream.ToolCallSnapshot) map[int64]stream.ToolCa
 	return result
 }
 
-func newToolCallEvent(call stream.ToolCallSnapshot) model.ToolCallEvent {
+func newToolCallEvent(messageID string, call stream.ToolCallSnapshot) model.ToolCallEvent {
 	return model.ToolCallEvent{
 		ID:           call.ID,
+		MessageID:    messageID,
 		ProviderID:   call.ProviderID,
 		Name:         call.Name,
 		Arguments:    call.Arguments,

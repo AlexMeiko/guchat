@@ -41,6 +41,7 @@ func newMessageResponse(message *entity.Message, toolCalls []model.ToolCallEvent
 		ToolCalls:        toolCalls,
 		Status:           message.Status,
 		ErrorMessage:     message.ErrorMessage,
+		Seq:              message.Seq,
 		CreatedAt:        message.CreatedAt,
 	}
 }
@@ -174,6 +175,11 @@ func (h *MessageHandler) Create(c *gin.Context) {
 		return
 	}
 
+	h.runtimeManager.Publish(conversationID, stream.Event{
+		Type:      stream.EventTypeMessageCreated,
+		MessageID: message.ID,
+		Message:   message,
+	})
 	c.JSON(http.StatusCreated, newMessageResponse(message, nil))
 }
 
@@ -265,6 +271,11 @@ func (h *MessageHandler) UpdateContentByIDAndConversationID(c *gin.Context) {
 		return
 	}
 
+	h.runtimeManager.Publish(conversationID, stream.Event{
+		Type:      stream.EventTypeMessageUpdated,
+		MessageID: message.ID,
+		Message:   message,
+	})
 	c.JSON(http.StatusOK, newMessageResponse(message, nil))
 }
 
@@ -305,6 +316,10 @@ func (h *MessageHandler) DeleteByIDAndConversationID(c *gin.Context) {
 	if task, ok := h.runtimeManager.Get(conversationID, messageID); ok {
 		task.Cancel("message deleted by user")
 	}
+	h.runtimeManager.Publish(conversationID, stream.Event{
+		Type:      stream.EventTypeMessageDeleted,
+		MessageID: messageID,
+	})
 	c.Status(http.StatusNoContent)
 }
 

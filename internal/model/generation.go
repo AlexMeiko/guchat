@@ -12,6 +12,7 @@ type GenerationConflictResponse struct {
 
 type ToolCallEvent struct {
 	ID           int64  `json:"id"`
+	MessageID    string `json:"message_id,omitempty"`
 	ProviderID   string `json:"provider_id"`
 	Name         string `json:"name"`
 	Arguments    string `json:"arguments"`
