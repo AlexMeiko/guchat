@@ -189,14 +189,23 @@ func (t *Task) Snapshot() Snapshot {
 	}
 }
 
+type Event struct {
+	Type      EventType
+	MessageID string
+	Message   *entity.Message
+	Task      *Task
+}
+
 type Manager struct {
-	mu    sync.RWMutex
-	tasks map[string]*Task
+	mu          sync.RWMutex
+	tasks       map[string]*Task
+	subscribers map[string]map[chan Event]struct{}
 }
 
 func NewManager() *Manager {
 	return &Manager{
-		tasks: make(map[string]*Task),
+		tasks:       make(map[string]*Task),
+		subscribers: make(map[string]map[chan Event]struct{}),
 	}
 }
 
@@ -258,4 +267,73 @@ func (m *Manager) Delete(conversationID, messageID string) bool {
 
 	delete(m.tasks, conversationID)
 	return true
+}
+
+func (m *Manager) Subscribe(conversationID string) (
+	current *Task,
+	events <-chan Event,
+	unsubscribe func(),
+) {
+	eventChan := make(chan Event, 16)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.subscribers[conversationID] == nil {
+		m.subscribers[conversationID] = make(map[chan Event]struct{})
+	}
+
+	m.subscribers[conversationID][eventChan] = struct{}{}
+	var once sync.Once
+
+	unsubscribe = func() {
+		once.Do(func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+
+			subscribers := m.subscribers[conversationID]
+			if subscribers == nil {
+				return
+			}
+
+			if _, ok := subscribers[eventChan]; !ok {
+				// Publish 已经移除并关闭了这个 channel
+				return
+			}
+
+			// 删对应的订阅 channel
+			delete(subscribers, eventChan)
+
+			//如果这个会话都没人订阅了，就直接把第二维map删掉
+			if len(subscribers) == 0 {
+				delete(m.subscribers, conversationID)
+			}
+
+			close(eventChan)
+		})
+	}
+
+	current = m.tasks[conversationID]
+	return current, eventChan, unsubscribe
+}
+
+func (m *Manager) Publish(conversationID string, event Event) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	subscribers := m.subscribers[conversationID]
+
+	for eventChan := range subscribers {
+		select {
+		case eventChan <- event:
+		default:
+			// 慢连接无法继续接收，关闭它让客户端重连并重新同步
+			delete(subscribers, eventChan)
+			close(eventChan)
+		}
+	}
+
+	if len(subscribers) == 0 {
+		delete(m.subscribers, conversationID)
+	}
 }
