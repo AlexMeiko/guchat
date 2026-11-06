@@ -63,7 +63,7 @@ func (p *BuiltinProvider) memoryToolDefinitions() []service.ToolDefinition {
 	return []service.ToolDefinition{
 		{
 			Name:        ToolSearchMemory,
-			Description: "搜索当前用户和当前会话可用的长期记忆、偏好、事实、约束、总结、知识和代码片段。当用户问题可能涉及个人信息、偏好、项目知识、文档、代码或先前记录，或你不确定是否保存过相关信息时使用。",
+			Description: "搜索当前用户和当前会话可用的长期记忆、偏好、事实、约束、总结、知识和代码片段。当用户问题可能涉及个人信息、偏好、项目知识、文档、代码或先前记录，或你不确定是否保存过相关信息时使用。写入或更新记忆前也必须先用它查重，确认是否已有同主题记忆。",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -97,7 +97,7 @@ func (p *BuiltinProvider) memoryToolDefinitions() []service.ToolDefinition {
 		},
 		{
 			Name:        ToolAddMemory,
-			Description: "写入一条 active 记忆。仅当用户明确要求记住某件事，或当前对话产生了后续明显有用的长期信息时使用。不能创建 global 记忆，不能传 user_id、conversation_id、origin 或 status。",
+			Description: "写入一条 active 记忆。仅当用户明确要求记住某件事，或当前对话产生了后续明显有用的长期信息时使用。写入前必须先用 search_memory 检查是否已有同主题记忆：不存在才新建；已存在时禁止新旧并存，必须把旧记忆中仍然有效的内容与最新状态合并重写为一条全量快照再写入，并随后用 disable_memory 禁用被取代的旧记忆，确保同一主题只保留一条 active 记录。",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -107,7 +107,7 @@ func (p *BuiltinProvider) memoryToolDefinitions() []service.ToolDefinition {
 					},
 					"category": {
 						"type": "string",
-						"description": "记忆分类，例如 user_profile、preference、fact、knowledge、goal、relationship、experience、daily_summary、constraint、negative_preference、situational。缺省值 fact。文档、知识点、代码片段、实现方案等可复用资料应使用 knowledge。constraint、negative_preference、user_profile、preference 的 user 记忆可能会在后续会话默认提供给模型，只用于长期稳定、跨会话普遍有用的信息；普通事实、知识、总结、短期状态不要放入这些分类。"
+						"description": "记忆分类，例如 user_profile、preference、fact、knowledge、goal、relationship、experience、daily_summary、constraint、negative_preference、situational。缺省值 fact。文档、知识点、代码片段、实现方案等可复用资料应使用 knowledge。category 为 constraint、negative_preference、user_profile、preference 的记忆会在后续会话默认提供给模型；因此需要跨会话长期生效的规则、约束、禁忌、用户画像和偏好必须选这四类（规则用 constraint，禁忌用 negative_preference）；用 fact 保存的内容不会在后续会话自动加载。这些分类只放长期稳定、跨会话普遍有用的信息，普通事实、知识、总结、短期状态不要放入。"
 					},
 					"source_type": {
 						"type": "string",
@@ -140,7 +140,7 @@ func (p *BuiltinProvider) memoryToolDefinitions() []service.ToolDefinition {
 		},
 		{
 			Name:        ToolDisableMemory,
-			Description: "禁用一条记忆，使其不再被后续检索到。只能禁用 user 自己的记忆。禁用后记忆状态变为 disabled，但数据仍保留在数据库中。",
+			Description: "禁用一条记忆，使其不再被后续检索到；也用于记忆合并更新后清理被新快照取代的旧条目。只能禁用 user 自己的记忆。",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {

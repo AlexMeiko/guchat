@@ -905,7 +905,10 @@ func newPromptMemoryMessage(items []entity.MemoryItem, toolMode string) *Generat
 
 	if toolMode == ToolModeAuto {
 		lines = append(lines, "如果需要更多历史记忆、偏好、事实、总结或知识，可以调用 search_memory。")
-		lines = append(lines, "当用户明确要求记住信息，或当前对话产生了长期有用的信息时，可以调用 add_memory。")
+		lines = append(lines, "写入或更新记忆前，必须先用 search_memory 检查是否已有同主题记忆：")
+		lines = append(lines, "1) 没有同主题记忆时，用 add_memory 新建一条；用户明确要求记住、或当前对话产生了长期有用的信息时都可以写入。")
+		lines = append(lines, "2) 已有同主题记忆时，禁止新旧各存一条：必须把旧记忆中仍然有效的信息与最新状态合并重写为一条全量快照，用 add_memory 写入，再用 disable_memory 禁用被取代的旧记忆。")
+		lines = append(lines, "3) 同一主题在任意时刻只保留一条 active 记忆；发现既有多条重复或互相冲突的记忆时，按同样方式合并并禁用多余条目。")
 		lines = append(lines, "当用户明确要求忘记、不要再记住、禁用某条记忆，或明确纠正已保存记忆时，先用 search_memory 找到对应私有记忆 ID，再调用 disable_memory；调用后不要再依据或复述该记忆。")
 	}
 
