@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/AlexMeiko/guchat/internal/config"
@@ -29,6 +31,17 @@ func main() {
 
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	skillsPath := ""
+	if cfg.SandboxEnabled {
+		skillsPath, err = filepath.Abs("./skills")
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := os.MkdirAll(skillsPath, 0755); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	mysqlDB, err := db.NewMySQL(cfg.DatabaseURL)
@@ -73,7 +86,7 @@ func main() {
 
 	var sandboxManager *sandbox.Manager
 	if cfg.SandboxEnabled {
-		dockerRunner := sandbox.NewDockerRunner(cfg.SandboxImage)
+		dockerRunner := sandbox.NewDockerRunner(cfg.SandboxImage, skillsPath)
 
 		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := dockerRunner.Check(checkCtx); err != nil {
@@ -213,6 +226,7 @@ func main() {
 		cfg.VisionFallbackModelID,
 		time.Duration(cfg.GenerationRetryInterval)*time.Second,
 		int(cfg.GenerationRetryMax),
+		skillsPath,
 	)
 	generationHandler := handler.NewGenerationHandler(generationService, conversationService, runtimeManager)
 

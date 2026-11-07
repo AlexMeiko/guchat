@@ -9,6 +9,7 @@
 - 支持 AI 回复生成、流式输出、生成中取消和生成任务恢复重试
 - 支持上下文摘要压缩，长对话生成时会使用摘要锚点和必要原始消息构造上下文
 - 支持 SSE 实时推送正文增量、推理增量、工具调用状态和生成状态
+- 支持全局 Agent Skills：每次生成开始时扫描 `./skills`，并在 Docker 沙箱中只读挂载
 - 支持 OpenAI Chat Completions、Responses API 和本地 `fake` 生成器
 - 支持模型配置管理，可动态启用或停用模型
 - 支持内置工具调用、记忆工具和 MCP 工具扩展，MCP 可通过 HTTP 或 stdio 接入
@@ -43,6 +44,7 @@
 │   ├── repository             # 数据访问层
 │   ├── router                 # 路由注册
 │   ├── sandbox                # Docker 终端沙箱与会话工作区
+│   ├── skill                  # 全局 Agent Skills catalog
 │   ├── service                # 业务逻辑层
 │   ├── stream                 # SSE 运行时管理
 │   └── tool                   # 内置工具与 MCP 工具接入
@@ -243,6 +245,10 @@ curl -X POST "http://localhost:8080/api/admin/models" \
 
 生成接口的 `tool_mode` 支持 `auto` 和 `none`。`tool_mode=auto` 时，后端会向模型提供当前可用的内置工具和 MCP 工具；`tool_mode=none` 时，本次生成不提供工具。
 
+### 全局 Skills
+
+每次生成开始时扫描 `./skills/<name>/SKILL.md`。文件需要包含 `name` 和 `description`，且 `name` 必须与目录名一致。只有 `SANDBOX_ENABLED=true` 且 `tool_mode=auto` 时，模型才会看到 catalog；匹配后通过终端工具读取容器内 `/skills/<name>/` 下的文件。技能目录只读挂载，不属于会话工作区；修改后下一次生成即可生效。
+
 外部 MCP 服务通过环境变量 `MCP_SERVERS` 配置。它是一个 JSON 数组，每个元素表示一个 MCP 服务；`name` 会作为工具名前缀，例如 MCP 服务返回 `tavily_extract` 时，最终暴露为 `tavily.tavily_extract`。
 
 HTTP MCP 示例：
@@ -273,6 +279,8 @@ MCP_SERVERS=[{"name":"github","transport":"stdio","command":"npx","args":["-y","
 沙箱默认关闭。设置 `SANDBOX_ENABLED=true` 后，启动时会检查 Docker 是否可用；不可用则进程退出。默认镜像为 `tanhao2015/guchat-sandbox:bookworm-v1.1`，可用 `SANDBOX_IMAGE` 覆盖。
 
 每个会话有独立工作区目录（默认 `SANDBOX_DATA_ROOT/{user_id}/{conversation_id}/workspace`），容器内挂载为 `/workspace`。只有该目录会在多轮对话之间保留；容器内其它状态（安装的软件包、环境变量、后台进程）随容器销毁而丢失。
+
+项目根目录下的 `./skills` 会挂载到容器内的 `/skills:ro`，不属于会话工作区，也不会出现在工作区文件接口中。
 
 模型需要先调用 `terminal_open` 再调用 `terminal_exec`。容器按 `SANDBOX_IDLE_TIMEOUT_SECONDS`（默认 `1800`）空闲回收。服务重启后，仍在运行的会话容器会重新纳入空闲回收；已经退出的容器会被删除。收养残留容器失败时，服务不会启动。
 

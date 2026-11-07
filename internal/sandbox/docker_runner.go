@@ -12,7 +12,8 @@ import (
 )
 
 type DockerRunner struct {
-	image string
+	image      string
+	skillsPath string
 }
 
 const execOutputLimitBytes = 32 * 1024
@@ -49,8 +50,8 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func NewDockerRunner(image string) *DockerRunner {
-	return &DockerRunner{image: image}
+func NewDockerRunner(image, skillsPath string) *DockerRunner {
+	return &DockerRunner{image: image, skillsPath: skillsPath}
 }
 
 func dockerContainerName(userID int64, conversationID string) string {
@@ -81,6 +82,7 @@ func (r *DockerRunner) Open(ctx context.Context, input OpenInput) error {
 		"--cap-drop", "MKNOD",
 		"--security-opt", "no-new-privileges",
 		"-v", input.WorkspacePath + ":/workspace",
+		"-v", r.skillsPath + ":/skills:ro",
 		"-w", "/workspace",
 		r.image,
 		"sleep", "infinity",

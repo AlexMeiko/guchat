@@ -11,6 +11,7 @@ import (
 
 	"github.com/AlexMeiko/guchat/internal/entity"
 	"github.com/AlexMeiko/guchat/internal/repository"
+	"github.com/AlexMeiko/guchat/internal/skill"
 	"github.com/AlexMeiko/guchat/internal/stream"
 )
 
@@ -60,6 +61,7 @@ type GenerationService struct {
 	visionAnalyzer       AnalyzeImageFunc
 	retryInterval        time.Duration
 	retryMax             int
+	skillsPath           string
 
 	retryMu    sync.Mutex
 	retryItems map[string]*generationRetryItem
@@ -86,6 +88,7 @@ func NewGenerationService(
 	visionFallbackModelID int64,
 	retryInterval time.Duration,
 	retryMax int,
+	skillsPath string,
 ) *GenerationService {
 	return &GenerationService{
 		messageService:       messageService,
@@ -103,6 +106,7 @@ func NewGenerationService(
 		visionAnalyzer:       newVisionAnalyzer(modelService, generatorFactory, visionFallbackModelID),
 		retryInterval:        retryInterval,
 		retryMax:             retryMax,
+		skillsPath:           skillsPath,
 		retryItems:           make(map[string]*generationRetryItem),
 	}
 }
@@ -276,6 +280,15 @@ func (s *GenerationService) Process(
 		return fail(ErrModelDisabled)
 	}
 
+	skillsPrompt := ""
+	if toolMode == ToolModeAuto && s.skillsPath != "" {
+		catalog, err := skill.LoadCatalog(s.skillsPath)
+		if err != nil {
+			return fail(err)
+		}
+		skillsPrompt = catalog.Prompt()
+	}
+
 	generationContext, err := s.messageService.ListGenerationContextWithSummaryByConversationID(
 		ctx,
 		userID,
@@ -323,8 +336,8 @@ func (s *GenerationService) Process(
 
 	workingSummary := generationContext.SummaryContent
 
-	// 记忆注入
-	var promptMemoryMessage *GenerateMessage
+	// system prompt 注入
+	var systemPromptMessage *GenerateMessage
 
 	if s.memoryService != nil {
 		promptMemories, err := s.memoryService.ListPromptMemories(ctx, userID, promptMemoryLimit)
@@ -332,7 +345,13 @@ func (s *GenerationService) Process(
 			return fail(err)
 		}
 
-		promptMemoryMessage = newPromptMemoryMessage(promptMemories, toolMode)
+		systemPromptMessage = newPromptMemoryMessage(promptMemories, toolMode)
+	}
+	if skillsPrompt != "" {
+		if systemPromptMessage == nil {
+			systemPromptMessage = &GenerateMessage{Role: entity.MessageRoleSystem}
+		}
+		systemPromptMessage.Content += "\n\n" + skillsPrompt
 	}
 
 	generator, err := s.generatorFactory.Get(modelConfig)
@@ -350,9 +369,9 @@ func (s *GenerationService) Process(
 
 	triggerTokens := s.contextCompressTriggerTokens()
 	toolsTokens := estimateToolDefinitionsTokens(tools)
-	memoryTokens := 0
-	if promptMemoryMessage != nil {
-		memoryTokens = estimateGenerateMessageTokens(*promptMemoryMessage)
+	systemPromptTokens := 0
+	if systemPromptMessage != nil {
+		systemPromptTokens = estimateGenerateMessageTokens(*systemPromptMessage)
 	}
 
 	summaryTokens := 0
@@ -366,7 +385,7 @@ func (s *GenerationService) Process(
 	for _, nextMessage := range generateMessages {
 		nextTokens := estimateGenerateMessageTokens(nextMessage)
 
-		if toolsTokens+memoryTokens+summaryTokens+bufferTokens+nextTokens > triggerTokens && len(buffer) > 0 {
+		if toolsTokens+systemPromptTokens+summaryTokens+bufferTokens+nextTokens > triggerTokens && len(buffer) > 0 {
 			summaryEnd := len(buffer)
 			if buffer[summaryEnd-1].Role != entity.MessageRoleAssistant {
 				summaryEnd = 0
@@ -379,7 +398,7 @@ func (s *GenerationService) Process(
 			}
 
 			if summaryEnd > 0 {
-				summaryMessages := s.assembler.Prefix(workingSummary, promptMemoryMessage, buffer[:summaryEnd])
+				summaryMessages := s.assembler.Prefix(workingSummary, systemPromptMessage, buffer[:summaryEnd])
 				summary, err := generateSummary(ctx, generator, modelConfig, summaryMessages, tools)
 				if err != nil {
 					return fail(err)
@@ -414,7 +433,7 @@ func (s *GenerationService) Process(
 		bufferTokens += nextTokens
 	}
 
-	generateMessages = s.assembler.Prefix(workingSummary, promptMemoryMessage, buffer)
+	generateMessages = s.assembler.Prefix(workingSummary, systemPromptMessage, buffer)
 
 	for {
 		if !task.Start() {
