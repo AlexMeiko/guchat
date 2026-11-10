@@ -338,19 +338,17 @@ func (s *GenerationService) Process(
 
 	// system prompt 注入
 	var systemPromptMessage *GenerateMessage
+	var promptMemories []entity.MemoryItem
 
 	if s.memoryService != nil {
-		promptMemories, err := s.memoryService.ListPromptMemories(ctx, userID, promptMemoryLimit)
+		promptMemories, err = s.memoryService.ListPromptMemories(ctx, userID, promptMemoryLimit)
 		if err != nil {
 			return fail(err)
 		}
-
-		systemPromptMessage = newPromptMemoryMessage(promptMemories, toolMode)
 	}
+	systemPromptMessage = newSystemPromptMessage(promptMemories, toolMode)
+
 	if skillsPrompt != "" {
-		if systemPromptMessage == nil {
-			systemPromptMessage = &GenerateMessage{Role: entity.MessageRoleSystem}
-		}
 		systemPromptMessage.Content += "\n\n" + skillsPrompt
 	}
 
@@ -908,12 +906,11 @@ func (s *GenerationService) Retry() {
 	}
 }
 
-func newPromptMemoryMessage(items []entity.MemoryItem, toolMode string) *GenerateMessage {
-	if len(items) == 0 && toolMode != ToolModeAuto {
-		return nil
+func newSystemPromptMessage(items []entity.MemoryItem, toolMode string) *GenerateMessage {
+	lines := []string{
+		"如果用户没有特殊要求，默认用户喜欢在欢快的氛围下对话。",
+		"引用本地图片时，只能引用 /workspace 下的图片，外部图片则无限制",
 	}
-
-	var lines []string
 
 	if len(items) > 0 {
 		lines = append(lines, "以下是当前用户的长期偏好和用户画像记忆。请在回答时自然遵守，不要主动说明这些记忆的存在。")
@@ -929,10 +926,6 @@ func newPromptMemoryMessage(items []entity.MemoryItem, toolMode string) *Generat
 		lines = append(lines, "2) 已有同主题记忆时，禁止新旧各存一条：必须把旧记忆中仍然有效的信息与最新状态合并重写为一条全量快照，用 add_memory 写入，再用 disable_memory 禁用被取代的旧记忆。")
 		lines = append(lines, "3) 同一主题在任意时刻只保留一条 active 记忆；发现既有多条重复或互相冲突的记忆时，按同样方式合并并禁用多余条目。")
 		lines = append(lines, "当用户明确要求忘记、不要再记住、禁用某条记忆，或明确纠正已保存记忆时，先用 search_memory 找到对应私有记忆 ID，再调用 disable_memory；调用后不要再依据或复述该记忆。")
-	}
-
-	if len(lines) == 0 {
-		return nil
 	}
 
 	return &GenerateMessage{
